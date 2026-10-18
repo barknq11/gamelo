@@ -530,6 +530,15 @@ impl App {
         });
     }
 
+    /// How many installed games have an update (0 until the library is loaded).
+    pub fn store_update_count(&self, store: Store) -> usize {
+        let installed = self.stores.installed.get(&store);
+        self.stores.owned.get(&store).into_iter().flatten().filter(|o| {
+            let i = installed.and_then(|l| l.iter().find(|i| i.app == o.app));
+            i.is_some() && self.store_info(store, o, i).update
+        }).count()
+    }
+
     /// What we know about one owned game: its install, task and library entry.
     fn store_info(&self, store: Store, o: &Owned, i: Option<&Installed>) -> Info {
         let busy_key = format!("app:{}:{}", key(store), o.app);

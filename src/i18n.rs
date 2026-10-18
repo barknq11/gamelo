@@ -172,6 +172,9 @@ mod tests {
             include_str!("stores.rs"),
             include_str!("stores_ui.rs"),
             include_str!("cleanup.rs"),
+            include_str!("home.rs"),
+            include_str!("stats_ui.rs"),
+            include_str!("sessions.rs"),
         ];
         let calls = [
             "tr(\"", "trf(\"", "lg(\"", "lfmt(\"", "note(ui, indent, \"", "note(ui, 0.0, \"", "note(ui, 128.0, \"",

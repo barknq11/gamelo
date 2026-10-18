@@ -15,11 +15,14 @@ mod couch;
 mod extras;
 mod gamepad;
 mod hltb;
+mod home;
 mod i18n;
 mod library_list;
 mod proton;
 mod saves;
 mod saves_ui;
+mod sessions;
+mod stats_ui;
 mod i18n_ar;
 mod optiscaler;
 mod rtl_edit;
@@ -381,6 +384,9 @@ struct CustomGame {
     /// cloud saves synced around each session.
     #[serde(default)]
     store: Option<stores::StoreLink>,
+    /// Unix time it was added (0 = before this was recorded).
+    #[serde(default)]
+    added: u64,
 }
 
 /// Where a game stands: set by hand, except that launching an unsorted or
@@ -631,6 +637,9 @@ fn record_session_in(dir: &Path, id: &str, started: u64, secs: u64, exit: Option
     s.last_session_secs = secs;
     s.last_exit = exit;
     s.sessions += 1;
+    if secs > 0 {
+        sessions::append(dir, &sessions::Session { id: id.to_string(), start: started, secs });
+    }
     let path = dir.join("stats.json");
     let tmp = dir.join("stats.json.tmp");
     if fs::write(&tmp, serde_json::to_string_pretty(&stats).unwrap_or_default()).is_ok() {
@@ -2740,6 +2749,8 @@ struct ArtState {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Page {
+    Home,
+    Stats,
     Library,
     Stores,
     Cleanup,
@@ -2947,6 +2958,9 @@ struct App {
     confirm_remove: Option<String>,
     edit: EditBuf,
     stats: Stats,
+    /// Every session since tracking started (for Home and Stats).
+    sessions: Vec<sessions::Session>,
+    home: home::HomeState,
     running: HashMap<String, RunMarker>,
     /// Games the user asked to stop, so their exit isn't reported as a crash.
     stopping: HashSet<String>,
@@ -3001,7 +3015,7 @@ impl App {
             steam_root,
             proton_tools,
             cfg,
-            page: Page::Library,
+            page: Page::Home,
             selected: None,
             search: String::new(),
             sort: SortMode::Recent,
@@ -3022,6 +3036,8 @@ impl App {
             confirm_remove: None,
             edit: EditBuf::default(),
             stats: load_stats(),
+            sessions: sessions::load(),
+            home: Default::default(),
             running: scan_running(),
             stopping: HashSet::new(),
             children: Vec::new(),
@@ -3807,6 +3823,7 @@ impl App {
         self.proton_tools = detect_proton_tools(self.steam_root.as_deref());
         self.deps = self.dep_rows();
         self.stats = load_stats();
+        self.sessions = sessions::load();
         self.running = scan_running();
         self.set_status(lg("Refreshed").into(), false);
     }
@@ -3899,6 +3916,7 @@ impl App {
             return;
         }
         let before = std::mem::replace(&mut self.stats, load_stats());
+        self.sessions = sessions::load();
         for m in ended {
             self.forget_disk_use(&m.id);
             let s = self.stats.get(&m.id).cloned().unwrap_or_default();
@@ -4173,6 +4191,7 @@ impl App {
             proton_dir,
             flags: self.cfg.settings.new_game_flags(),
             umu_id,
+            added: unix_now(),
             ..Default::default()
         };
         let (id, name) = (g.id.clone(), g.name.clone());
@@ -7896,6 +7915,13 @@ impl App {
                 // The selection highlight is drawn underneath and slides between items.
                 let highlight = ui.painter().add(egui::Shape::Noop);
                 let mut selected: Option<egui::Rect> = None;
+                let r = nav_item(ui, self.page == Page::Home, "Home", None);
+                if self.page == Page::Home {
+                    selected = Some(r.rect);
+                }
+                if r.clicked() {
+                    self.page = Page::Home;
+                }
                 let in_library = matches!(self.page, Page::Library | Page::Game | Page::Artwork | Page::Saves);
                 let r = nav_item(ui, in_library, "Library", Some(game_count));
                 if in_library {
@@ -7903,6 +7929,13 @@ impl App {
                 }
                 if r.clicked() {
                     self.page = Page::Library;
+                }
+                let r = nav_item(ui, self.page == Page::Stats, "Stats", None);
+                if self.page == Page::Stats {
+                    selected = Some(r.rect);
+                }
+                if r.clicked() {
+                    self.page = Page::Stats;
                 }
                 let r = nav_item(ui, self.page == Page::Stores, "Stores", None);
                 if self.page == Page::Stores {
@@ -8118,6 +8151,8 @@ impl App {
                             // (right-to-left pages are flush against it otherwise).
                             let edge = egui::Margin { right: 12, ..Default::default() };
                             egui::Frame::new().inner_margin(edge).show(ui, |ui| dir_ui(ui, |ui| match self.page {
+                                Page::Home => self.page_home(ui, &ctx, acts),
+                                Page::Stats => self.page_stats(ui, &ctx, acts),
                                 Page::Library => self.page_library(ui, &ctx, acts),
                                 Page::Game => self.page_game(ui, &ctx, acts),
                                 Page::Artwork => self.page_artwork(ui, &ctx, acts),
@@ -8846,6 +8881,7 @@ mod tests {
         let ctx = egui::Context::default();
         configure_style(&ctx);
         let mut app = App::new(find_steam_root());
+        app.page = Page::Library;
         app.cfg.settings.zoom = 1.0; // in memory only
         app.cfg.settings.language = "en".into();
         app.cfg.settings.tile_size = String::new();
@@ -8954,7 +8990,7 @@ mod tests {
         frame(&mut app, &mut raster, click(args_field), None);
         frame(&mut app, &mut raster, release(args_field), None);
         frame(&mut app, &mut raster, vec![egui::Event::Text("-dx11".into())], None);
-        let sidebar_library = egui::pos2(110.0, 138.0);
+        let sidebar_library = egui::pos2(110.0, 184.0);
         frame(&mut app, &mut raster, click(sidebar_library), None);
         frame(&mut app, &mut raster, release(sidebar_library), None);
         let g = &app.cfg.custom_games[app.selected_index().unwrap()];
@@ -9581,6 +9617,64 @@ mod tests {
         h.app.stores.tab = Store::Gog;
         h.idle(3);
         h.shot("st8-gog-ar.png");
+        h.app.cfg.settings.language = "en".into();
+    }
+
+    /// Home and Stats with two months of made-up sessions:
+    /// SHOTS=dir cargo test -- --ignored home_shots --test-threads=1
+    #[test]
+    #[ignore]
+    fn home_shots() {
+        let mut h = Harness::new("home");
+        let order = h.app.library_order();
+        let ids: Vec<String> = order.iter().map(|&i| h.app.cfg.custom_games[i].id.clone()).collect();
+        // Sessions on most days of the last ~70 days, heavier at weekends.
+        let now = unix_now();
+        let mut log = Vec::new();
+        for back in 0..70u64 {
+            if back % 5 == 3 {
+                continue;
+            }
+            let start = now - back * 86_400 - 3 * 3600;
+            let weekend = sessions::weekday(sessions::day_of(start)) >= 5;
+            let secs = (25 + (back * 37) % 140) * 60 * if weekend { 2 } else { 1 };
+            log.push(sessions::Session { id: ids[(back as usize / 3) % 4].clone(), start, secs });
+        }
+        for s in &log {
+            let st = h.app.stats.entry(s.id.clone()).or_default();
+            st.playtime_secs += s.secs;
+            st.last_played = st.last_played.max(s.start);
+        }
+        h.app.sessions = log;
+        h.app.cfg.custom_games[order[6]].status = GameStatus::Backlog;
+        h.app.home.free = Some(vec![]);
+        h.app.page = Page::Home;
+        h.idle(4);
+        h.shot("h1-home.png");
+        h.scroll(-600.0);
+        h.shot("h2-home-bottom.png");
+        h.app.page = Page::Stats;
+        h.idle(2);
+        h.scroll(5000.0);
+        h.shot("h3-stats.png");
+        h.scroll(-700.0);
+        h.shot("h4-stats-mid.png");
+        h.scroll(-2000.0);
+        h.shot("h5-stats-bottom.png");
+        h.app.home.range = stats_ui::Range::Year;
+        h.scroll(5000.0);
+        h.shot("h6-stats-year.png");
+        h.app.cfg.settings.language = "ar".into();
+        h.app.page = Page::Home;
+        h.idle(3);
+        h.scroll(5000.0);
+        h.shot("h7-home-ar.png");
+        h.app.page = Page::Stats;
+        h.idle(3);
+        h.scroll(5000.0);
+        h.shot("h8-stats-ar.png");
+        h.scroll(-700.0);
+        h.shot("h9-stats-ar-mid.png");
         h.app.cfg.settings.language = "en".into();
     }
 

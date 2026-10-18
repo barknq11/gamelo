@@ -827,6 +827,7 @@ impl App {
                     hero: path(&s.hero),
                     art_checked: s.cover.is_some() && s.hero.is_some(),
                     env: s.env.clone(),
+                    added: unix_now(),
                     ..Default::default()
                 };
                 self.motion.fresh.insert(g.id.clone(), None);
