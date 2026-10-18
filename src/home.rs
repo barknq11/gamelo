@@ -264,6 +264,42 @@ impl App {
         });
     }
 
+    /// A small poster with its title under it: click opens the game's page,
+    /// right-click has the game's menu.
+    pub fn small_poster(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, i: usize, size: egui::Vec2, salt: &str, acts: &mut Acts) {
+        let (pw, ph) = (size.x, size.y);
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(pw, ph + 26.0), egui::Sense::click());
+        let g = self.cfg.custom_games[i].clone();
+        let h = ctx.animate_bool_with_time(egui::Id::unique(("small-poster", salt, &g.id)), resp.hovered(), self.secs(0.16));
+        let poster = egui::Rect::from_min_size(rect.min - egui::vec2(0.0, 4.0 * h), egui::vec2(pw, ph));
+        let painter = ui.painter().clone();
+        match self.game_poster(ctx, i).or_else(|| self.game_generated_poster(ctx, i)) {
+            Some(t) => {
+                painter.add(cover_fill_shape(&t, poster, 8, 1.0));
+            }
+            None => {
+                painter.rect_filled(poster, rad(8), pal().card2);
+            }
+        }
+        painter.rect_stroke(poster, rad(8), egui::Stroke::new(1.0 + h, pal().border.lerp_to_gamma(pal().accent, h)), egui::StrokeKind::Inside);
+        if self.running.contains_key(&g.id) {
+            let over = theme::OverImage::new();
+            poster_badge(&painter, poster.left_top() + egui::vec2(6.0, 6.0), "Running", pal().ok, 1.0);
+            drop(over);
+        }
+        let mut job = egui::text::LayoutJob::simple_singleline(disp(&g.name), egui::FontId::proportional(13.0), pal().text.lerp_to_gamma(pal().accent, 0.5 * h));
+        job.wrap = egui::text::TextWrapping { max_width: pw, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+        let galley = painter.layout_job(job);
+        let x = if rtl() { rect.right() - galley.size().x } else { rect.left() };
+        painter.galley(egui::pos2(x, rect.top() + ph + 6.0), galley, pal().text);
+        let running = self.running.contains_key(&g.id);
+        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+        if resp.clicked() {
+            acts.game.push((g.id.clone(), GameAct::Open));
+        }
+        resp.context_menu(|ui| menu_ui(ui, |ui| game_menu(ui, &g, running, false, &self.cfg.settings.collections, acts)));
+    }
+
     /// A titled row of small posters that fit the width.
     fn poster_row(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, title: &str, games: &[usize], acts: &mut Acts) {
         let (pw, ph, gap) = (124.0, 186.0, 16.0);
@@ -280,36 +316,7 @@ impl App {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = gap;
             for &i in games.iter().take(fit) {
-                let (rect, resp) = ui.allocate_exact_size(egui::vec2(pw, ph + 26.0), egui::Sense::click());
-                let g = self.cfg.custom_games[i].clone();
-                let h = ctx.animate_bool_with_time(egui::Id::unique(("home-poster", title, &g.id)), resp.hovered(), self.secs(0.16));
-                let poster = egui::Rect::from_min_size(rect.min - egui::vec2(0.0, 4.0 * h), egui::vec2(pw, ph));
-                let painter = ui.painter().clone();
-                match self.game_poster(ctx, i).or_else(|| self.game_generated_poster(ctx, i)) {
-                    Some(t) => {
-                        painter.add(cover_fill_shape(&t, poster, 8, 1.0));
-                    }
-                    None => {
-                        painter.rect_filled(poster, rad(8), pal().card2);
-                    }
-                }
-                painter.rect_stroke(poster, rad(8), egui::Stroke::new(1.0 + h, pal().border.lerp_to_gamma(pal().accent, h)), egui::StrokeKind::Inside);
-                if self.running.contains_key(&g.id) {
-                    let over = theme::OverImage::new();
-                    poster_badge(&painter, poster.left_top() + egui::vec2(6.0, 6.0), "Running", pal().ok, 1.0);
-                    drop(over);
-                }
-                let mut job = egui::text::LayoutJob::simple_singleline(disp(&g.name), egui::FontId::proportional(13.0), pal().text.lerp_to_gamma(pal().accent, 0.5 * h));
-                job.wrap = egui::text::TextWrapping { max_width: pw, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
-                let galley = painter.layout_job(job);
-                let x = if rtl() { rect.right() - galley.size().x } else { rect.left() };
-                painter.galley(egui::pos2(x, rect.top() + ph + 6.0), galley, pal().text);
-                let running = self.running.contains_key(&g.id);
-                let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-                if resp.clicked() {
-                    acts.game.push((g.id.clone(), GameAct::Open));
-                }
-                resp.context_menu(|ui| menu_ui(ui, |ui| game_menu(ui, &g, running, false, &self.cfg.settings.collections, acts)));
+                self.small_poster(ui, ctx, i, egui::vec2(pw, ph), title, acts);
             }
         });
         ui.add_space(22.0);

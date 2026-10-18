@@ -179,6 +179,7 @@ mod tests {
             include_str!("setup.rs"),
             include_str!("tray.rs"),
             include_str!("launchers.rs"),
+            include_str!("emulation.rs"),
         ];
         let calls = [
             "tr(\"", "trf(\"", "lg(\"", "lfmt(\"", "note(ui, indent, \"", "note(ui, 0.0, \"", "note(ui, 128.0, \"",

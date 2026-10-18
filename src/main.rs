@@ -12,6 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod cleanup;
 mod couch;
+mod emulation;
 mod extras;
 mod gamepad;
 mod hltb;
@@ -394,6 +395,9 @@ struct CustomGame {
     /// A Windows launcher, or a game that starts through one.
     #[serde(default)]
     launcher: Option<launchers::LauncherLink>,
+    /// A ROM, run by an emulator (shown on the Emulation page, not the Library).
+    #[serde(default)]
+    rom: Option<emulation::RomLink>,
 }
 
 /// Where a game stands: set by hand, except that launching an unsorted or
@@ -496,6 +500,9 @@ struct Settings {
     /// First-run setup was finished or skipped.
     #[serde(default)]
     setup_done: bool,
+    /// Folders scanned for ROMs (Emulation page).
+    #[serde(default)]
+    rom_dirs: Vec<String>,
     /// Performance flags new games start with (None = MangoHud + FSR4 upgrade).
     #[serde(default)]
     new_flags: Option<GameFlags>,
@@ -2767,6 +2774,7 @@ struct ArtState {
 enum Page {
     Home,
     Launchers,
+    Emulation,
     Stats,
     Library,
     Stores,
@@ -2990,6 +2998,7 @@ struct App {
     launchers_due: Vec<String>,
     /// The launcher being removed (confirm dialog).
     launcher_remove: Option<&'static str>,
+    emu: emulation::EmuState,
     running: HashMap<String, RunMarker>,
     /// Games the user asked to stop, so their exit isn't reported as a crash.
     stopping: HashSet<String>,
@@ -3075,6 +3084,7 @@ impl App {
             launchers_scanned: -100.0,
             launchers_due: Vec::new(),
             launcher_remove: None,
+            emu: Default::default(),
             running: scan_running(),
             stopping: HashSet::new(),
             children: Vec::new(),
@@ -3990,6 +4000,12 @@ impl App {
         if self.running.contains_key(&g.id) {
             return;
         }
+        if let Some(r) = g.rom.as_ref().filter(|_| g.exe.is_empty()) {
+            let (emu, _) = emulation::suggestion(&r.platform);
+            let console = emulation::platform(&r.platform).map_or(r.platform.as_str(), |p| p.name);
+            self.set_status(lfmt("No emulator for {} yet — install {} (see the Emulation page)", &[&console, &emu]), true);
+            return;
+        }
         // Surface problems (missing exe, no Proton…) here; the runner has no window.
         if let Err(e) = build_launch(g, &self.cfg.settings) {
             let id = g.id.clone();
@@ -4664,6 +4680,7 @@ impl App {
         let q = query.trim().to_lowercase();
         let games = &self.cfg.custom_games;
         let mut v: Vec<usize> = (0..games.len())
+            .filter(|&i| games[i].rom.is_none())
             .filter(|&i| q.is_empty() || games[i].name.to_lowercase().contains(&q))
             .filter(|&i| self.filter_matches(&self.lib_filter, i))
             .collect();
@@ -7947,7 +7964,7 @@ impl App {
     /// The normal window: sidebar, status bar and the current page.
     fn draw_desktop(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, acts: &mut Acts) {
         let ctx = ctx.clone();
-        let game_count = self.cfg.custom_games.len();
+        let game_count = self.cfg.custom_games.iter().filter(|g| g.rom.is_none()).count();
 
         let nav = if rtl() { egui::Panel::right("nav") } else { egui::Panel::left("nav") };
         nav.exact_size(226.0)
@@ -8022,6 +8039,13 @@ impl App {
                 }
                 if r.clicked() {
                     self.page = Page::Launchers;
+                }
+                let r = nav_item(ui, self.page == Page::Emulation, "Emulation", None);
+                if self.page == Page::Emulation {
+                    selected = Some(r.rect);
+                }
+                if r.clicked() {
+                    self.page = Page::Emulation;
                 }
                 if nav_item(ui, false, "Couch mode", None).on_hover_text(tr("Fullscreen, for the sofa and a controller (F11 or the Guide button)")).clicked() {
                     self.couch_toggle(&ctx);
@@ -8232,6 +8256,7 @@ impl App {
                             egui::Frame::new().inner_margin(edge).show(ui, |ui| dir_ui(ui, |ui| match self.page {
                                 Page::Home => self.page_home(ui, &ctx, acts),
                                 Page::Launchers => self.page_launchers(ui, &ctx, acts),
+                                Page::Emulation => self.page_emulation(ui, &ctx, acts),
                                 Page::Stats => self.page_stats(ui, &ctx, acts),
                                 Page::Library => self.page_library(ui, &ctx, acts),
                                 Page::Game => self.page_game(ui, &ctx, acts),
@@ -9711,6 +9736,32 @@ mod tests {
         h.app.stores.tab = Store::Gog;
         h.idle(3);
         h.shot("st8-gog-ar.png");
+        h.app.cfg.settings.language = "en".into();
+    }
+
+    /// The Emulation page with a few stand-in ROMs:
+    /// SHOTS=dir cargo test -- --ignored emulation_shots --test-threads=1
+    #[test]
+    #[ignore]
+    fn emulation_shots() {
+        let mut h = Harness::new("emulation");
+        let roms = h.home.join("ROMs");
+        for f in ["snes/Super Mario World (USA).sfc", "snes/Chrono Trigger (USA).sfc", "gba/Metroid Fusion (Europe).gba", "ps2/Shadow of the Colossus.iso", "Celeste Classic.nes"] {
+            let p = roms.join(f);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, b"rom").unwrap();
+        }
+        h.app.cfg.settings.rom_dirs = vec![roms.to_string_lossy().into()];
+        let library = h.app.library_order().len();
+        h.app.page = Page::Emulation;
+        h.idle(4);
+        let n = h.app.cfg.custom_games.iter().filter(|g| g.rom.is_some()).count();
+        assert_eq!(n, 5, "every ROM is found");
+        assert_eq!(h.app.library_order().len(), library, "ROMs stay out of the Library");
+        h.shot("e1-emulation.png");
+        h.app.cfg.settings.language = "ar".into();
+        h.idle(3);
+        h.shot("e2-emulation-ar.png");
         h.app.cfg.settings.language = "en".into();
     }
 
