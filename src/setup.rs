@@ -99,12 +99,13 @@ impl App {
                     para(ui, "Bring your games in. You can always add more later from the Library.", pal().subtext, true);
                     ui.add_space(12.0);
                     let w = (ui.available_width() - 12.0) / 2.0;
-                    let options: [(&str, &str); 5] = [
+                    let options: [(&str, &str); 6] = [
                         ("Scan a folder", "Finds every game in a folder and adds them together."),
                         ("From Steam", "Non-Steam games you added to Steam, with their prefixes and artwork."),
                         ("From Lutris", "Games you installed with Lutris, keeping their prefixes."),
                         ("Epic Games or GOG", "Sign in and install the games you own there."),
                         ("Add one game", "Pick a single game's executable."),
+                        ("Windows launchers", "Battle.net, EA app, Ubisoft Connect or Rockstar, and their games."),
                     ];
                     let mut clicked = None;
                     for pair in options.chunks(2) {
@@ -123,6 +124,10 @@ impl App {
                         Some("From Steam") => acts.steam_import = true,
                         Some("From Lutris") => acts.lutris_import = true,
                         Some("Add one game") => acts.add = true,
+                        Some("Windows launchers") => {
+                            self.page = Page::Launchers;
+                            finish = true;
+                        }
                         Some(_) => {
                             self.page = Page::Stores;
                             finish = true;

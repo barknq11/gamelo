@@ -17,6 +17,7 @@ mod gamepad;
 mod hltb;
 mod home;
 mod i18n;
+mod launchers;
 mod library_list;
 mod proton;
 mod quick;
@@ -390,6 +391,9 @@ struct CustomGame {
     /// Unix time it was added (0 = before this was recorded).
     #[serde(default)]
     added: u64,
+    /// A Windows launcher, or a game that starts through one.
+    #[serde(default)]
+    launcher: Option<launchers::LauncherLink>,
 }
 
 /// Where a game stands: set by hand, except that launching an unsorted or
@@ -910,6 +914,10 @@ fn run_headless(id: &str) -> i32 {
         let _ = fs::rename(&tmp, &path);
     }
     let code = child.wait().ok().and_then(|s| s.code());
+    // Through a launcher, the command returns before the game ends.
+    if let Some(link) = &g.launcher {
+        launchers::wait_for_game(link, &cfg.settings);
+    }
     let secs = t0.elapsed().as_secs();
     record_session_in(&data_dir(), &g.id, started, secs, code);
     // A game that dies right away from an app-menu launch would otherwise
@@ -2658,6 +2666,7 @@ enum TaskKind {
     Saves,
     SaveDb,
     Components,
+    Launcher,
 }
 
 /// A long-running background job (a download, an install, a save backup).
@@ -2757,6 +2766,7 @@ struct ArtState {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Page {
     Home,
+    Launchers,
     Stats,
     Library,
     Stores,
@@ -2974,6 +2984,12 @@ struct App {
     setup: Option<setup::Setup>,
     /// The tray icon and global shortcut (not in tests).
     tray: Option<tray::TrayHandle>,
+    /// When the Launchers page last looked for new games (app time).
+    launchers_scanned: f64,
+    /// Launchers whose session just ended: look for games they installed.
+    launchers_due: Vec<String>,
+    /// The launcher being removed (confirm dialog).
+    launcher_remove: Option<&'static str>,
     running: HashMap<String, RunMarker>,
     /// Games the user asked to stop, so their exit isn't reported as a crash.
     stopping: HashSet<String>,
@@ -3056,6 +3072,9 @@ impl App {
             quick: None,
             setup: None,
             tray: None,
+            launchers_scanned: -100.0,
+            launchers_due: Vec::new(),
+            launcher_remove: None,
             running: scan_running(),
             stopping: HashSet::new(),
             children: Vec::new(),
@@ -3366,6 +3385,7 @@ impl App {
                 self.saves.summary.clear();
             }
             TaskKind::Proton | TaskKind::OptiScaler | TaskKind::Components | TaskKind::Store => {}
+            TaskKind::Launcher => self.launchers_scanned = -100.0,
         }
     }
 
@@ -3941,6 +3961,9 @@ impl App {
         self.sessions = sessions::load();
         for m in ended {
             self.forget_disk_use(&m.id);
+            if let Some(l) = self.cfg.custom_games.iter().find(|g| g.id == m.id).and_then(|g| g.launcher.as_ref()) {
+                self.launchers_due.push(l.key.clone());
+            }
             let s = self.stats.get(&m.id).cloned().unwrap_or_default();
             let old = before.get(&m.id).map_or(0, |b| b.playtime_secs);
             if s.playtime_secs > old {
@@ -7993,6 +8016,13 @@ impl App {
                 if r.clicked() {
                     self.page = Page::Stores;
                 }
+                let r = nav_item(ui, self.page == Page::Launchers, "Launchers", None);
+                if self.page == Page::Launchers {
+                    selected = Some(r.rect);
+                }
+                if r.clicked() {
+                    self.page = Page::Launchers;
+                }
                 if nav_item(ui, false, "Couch mode", None).on_hover_text(tr("Fullscreen, for the sofa and a controller (F11 or the Guide button)")).clicked() {
                     self.couch_toggle(&ctx);
                 }
@@ -8201,6 +8231,7 @@ impl App {
                             let edge = egui::Margin { right: 12, ..Default::default() };
                             egui::Frame::new().inner_margin(edge).show(ui, |ui| dir_ui(ui, |ui| match self.page {
                                 Page::Home => self.page_home(ui, &ctx, acts),
+                                Page::Launchers => self.page_launchers(ui, &ctx, acts),
                                 Page::Stats => self.page_stats(ui, &ctx, acts),
                                 Page::Library => self.page_library(ui, &ctx, acts),
                                 Page::Game => self.page_game(ui, &ctx, acts),
@@ -8306,6 +8337,15 @@ impl App {
         }
         self.remove_modal_ui(&ctx, &mut acts);
         self.proton_delete_modal(&ctx);
+        self.launcher_remove_modal(&ctx);
+        for key in std::mem::take(&mut self.launchers_due) {
+            if let Some(d) = launchers::def(&key) {
+                let n = self.launchers_sync(&ctx, d);
+                if n > 0 {
+                    self.set_status(lfmt("Added {} from {} to your library", &[&n, &d.name]), false);
+                }
+            }
+        }
         self.saves_modals(&ctx);
         self.hltb_modal(&ctx);
         self.quick_modal(&ctx, &mut acts);
@@ -9672,6 +9712,41 @@ mod tests {
         h.idle(3);
         h.shot("st8-gog-ar.png");
         h.app.cfg.settings.language = "en".into();
+    }
+
+    /// The Launchers page with a stand-in Ubisoft Connect and one game:
+    /// SHOTS=dir cargo test -- --ignored launcher_shots --test-threads=1
+    #[test]
+    #[ignore]
+    fn launcher_shots() {
+        let mut h = Harness::new("launchers");
+        let d = launchers::def("ubisoft").unwrap();
+        let pfx = launchers::prefix(&h.app.cfg.settings, d);
+        let c = pfx.join("drive_c");
+        let ubi = c.join("Program Files (x86)/Ubisoft/Ubisoft Game Launcher");
+        let game = ubi.join("games/Far Cry 5");
+        fs::create_dir_all(&game).unwrap();
+        fs::create_dir_all(c.join("windows/command")).unwrap();
+        for f in [ubi.join("UbisoftConnect.exe"), c.join("windows/command/start.exe"), game.join("FarCry5.exe")] {
+            fs::write(f, b"MZ").unwrap();
+        }
+        fs::write(pfx.join("system.reg"), "WINE REGISTRY Version 2\n\n[Software\\\\Wow6432Node\\\\Ubisoft\\\\Launcher\\\\Installs\\\\4311] 1700000000\n\"InstallDir\"=\"C:/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/games/Far Cry 5/\"\n").unwrap();
+        let before = h.app.cfg.custom_games.len();
+        h.app.page = Page::Launchers;
+        h.idle(4);
+        assert_eq!(h.app.cfg.custom_games.len(), before + 2, "the launcher and its game join the library");
+        let fc = h.app.cfg.custom_games.iter().find(|g| g.name == "Far Cry 5").unwrap();
+        assert_eq!(fc.args, "uplay://launch/4311/0");
+        assert_eq!(fc.launcher.as_ref().unwrap().watch, game.to_string_lossy());
+        h.shot("l1-launchers.png");
+        h.app.cfg.settings.language = "ar".into();
+        h.idle(3);
+        h.shot("l2-launchers-ar.png");
+        h.app.cfg.settings.language = "en".into();
+        h.app.launcher_remove = Some("ubisoft");
+        h.idle(3);
+        h.shot("l3-remove.png");
+        h.app.launcher_remove = None;
     }
 
     /// Ctrl+K quick search and first-run setup:
