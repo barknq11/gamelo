@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=ProtonLaunch
+Comment=One-click MangoHud / FSR4 launch options for Steam and Proton games
+Exec=protonlaunch
+Icon=protonlaunch
+Terminal=false
+Categories=Game;Utility;
+StartupNotify=true
