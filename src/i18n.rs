@@ -181,6 +181,11 @@ mod tests {
             include_str!("launchers.rs"),
             include_str!("emulation.rs"),
             include_str!("safety.rs"),
+            include_str!("model.rs"),
+            include_str!("runner.rs"),
+            include_str!("icons.rs"),
+            include_str!("net.rs"),
+            include_str!("sgdb.rs"),
         ];
         let calls = [
             "tr(\"", "trf(\"", "lg(\"", "lfmt(\"", "note(ui, indent, \"", "note(ui, 0.0, \"", "note(ui, 128.0, \"",
