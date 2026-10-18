@@ -169,6 +169,8 @@ mod tests {
             include_str!("store.rs"),
             include_str!("couch.rs"),
             include_str!("library_list.rs"),
+            include_str!("stores.rs"),
+            include_str!("stores_ui.rs"),
         ];
         let calls = [
             "tr(\"", "trf(\"", "lg(\"", "lfmt(\"", "note(ui, indent, \"", "note(ui, 0.0, \"", "note(ui, 128.0, \"",

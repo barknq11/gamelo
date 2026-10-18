@@ -23,6 +23,8 @@ mod i18n_ar;
 mod optiscaler;
 mod rtl_edit;
 mod shaping;
+mod stores;
+mod stores_ui;
 mod store;
 mod theme;
 use i18n::{disp, fmt_logical as lfmt, logical as lg, rtl, tr, trf};
@@ -322,6 +324,10 @@ struct CustomGame {
     /// Names of the collections the game is in (see `Settings::collections`).
     #[serde(default)]
     collections: Vec<String>,
+    /// Installed from Epic or GOG: launched with fresh online parameters and
+    /// cloud saves synced around each session.
+    #[serde(default)]
+    store: Option<stores::StoreLink>,
 }
 
 /// Where a game stands: set by hand, except that launching an unsorted or
@@ -396,6 +402,11 @@ struct Settings {
     /// Don't navigate with a game controller.
     #[serde(default)]
     no_gamepad: bool,
+    /// Where Epic and GOG games are installed (empty = ~/Games/Epic, ~/Games/GOG).
+    #[serde(default)]
+    epic_dir: String,
+    #[serde(default)]
+    gog_dir: String,
     /// The user's collections, in the order they're shown.
     #[serde(default)]
     collections: Vec<String>,
@@ -786,6 +797,21 @@ fn run_headless(id: &str) -> i32 {
     }
     // Pull newer saves from the sync folder and note the save folders' state.
     let pre = saves::before_launch(g, &cfg.settings);
+    // Store games: cloud saves down first, and Epic's fresh online parameters.
+    let mut g = g.clone();
+    if let Some(link) = g.store.clone() {
+        let prefix = game_prefix(&g, &cfg.settings);
+        if let Err(e) = stores::sync_saves(&link, &prefix, Path::new(&link.path), false) {
+            eprintln!("protonlaunch: cloud saves: {e}");
+        }
+        if link.store == stores::Store::Epic {
+            let online = stores::epic_online_args(&link.app);
+            if !online.is_empty() {
+                g.args = format!("{} {}", g.args, online.iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" ")).trim().to_string();
+            }
+        }
+    }
+    let g = &g;
     let (mut child, log) = match launch_game(g, &cfg.settings) {
         Ok(c) => c,
         Err(e) => {
@@ -824,6 +850,11 @@ fn run_headless(id: &str) -> i32 {
     // Back up and sync before the marker goes, so the window shows the game
     // as running until its saves are safe.
     saves::after_session(g, &cfg.settings, pre);
+    if let Some(link) = &g.store
+        && let Err(e) = stores::sync_saves(link, &game_prefix(g, &cfg.settings), Path::new(&link.path), true)
+    {
+        eprintln!("protonlaunch: cloud saves: {e}");
+    }
     let _ = fs::remove_file(&path);
     code.unwrap_or(1)
 }
@@ -2528,6 +2559,7 @@ struct Download {
 /// What a background task was for, so its completion can refresh the right things.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TaskKind {
+    Store,
     Proton,
     OptiScaler,
     Saves,
@@ -2543,12 +2575,17 @@ struct Task {
     kind: TaskKind,
     /// A file being downloaded and its expected size, to show progress.
     progress: Option<(PathBuf, u64)>,
+    /// Progress reported by the work itself, in ten-thousandths.
+    shared: Option<std::sync::Arc<std::sync::atomic::AtomicU32>>,
     rx: std::sync::mpsc::Receiver<Result<String, String>>,
 }
 
 impl Task {
     /// Download progress 0..1 (0 when unknown).
     fn fraction(&self) -> f32 {
+        if let Some(s) = &self.shared {
+            return s.load(std::sync::atomic::Ordering::Relaxed) as f32 / 10_000.0;
+        }
         match &self.progress {
             Some((p, total)) if *total > 0 => {
                 let got = fs::metadata(p).map_or(0, |m| m.len());
@@ -2627,6 +2664,7 @@ struct ArtState {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Page {
     Library,
+    Stores,
     Game,
     Artwork,
     Settings,
@@ -2813,6 +2851,9 @@ struct App {
     lib_cursor: Option<String>,
     lib_keys: bool,
     lib_scroll: bool,
+    stores: stores_ui::StoresState,
+    /// For store worker threads to wake the UI.
+    stores_ctx: Option<egui::Context>,
     /// The new/rename collection dialog, when open.
     collection_edit: Option<CollectionEdit>,
     /// Couch mode (fullscreen, controller-first), when it's on.
@@ -2889,6 +2930,8 @@ impl App {
             lib_cursor: None,
             lib_keys: false,
             lib_scroll: false,
+            stores: stores_ui::StoresState::default(),
+            stores_ctx: None,
             collection_edit: None,
             couch: None,
             pad: None,
@@ -3158,7 +3201,7 @@ impl App {
             let _ = tx.send(work());
         });
         self.set_status(format!("{label}…"), false);
-        self.tasks.push(Task { key: key.to_string(), label: label.to_string(), kind, progress, rx });
+        self.tasks.push(Task { key: key.to_string(), label: label.to_string(), kind, progress, shared: None, rx });
     }
 
     /// Collect finished tasks and report them.
@@ -3204,7 +3247,7 @@ impl App {
                 self.saves.view = None;
                 self.saves.summary.clear();
             }
-            TaskKind::Proton | TaskKind::OptiScaler | TaskKind::Components => {}
+            TaskKind::Proton | TaskKind::OptiScaler | TaskKind::Components | TaskKind::Store => {}
         }
     }
 
@@ -5236,10 +5279,13 @@ impl App {
                         ui.label(egui::RichText::new(disp(delta)).color(pal().ok.gamma_multiply(*alpha)));
                     }
                 });
-                let kind = match g.kind {
+                let mut kind = match g.kind {
                     GameKind::Windows => trf("Windows · {}", &[&self.proton_label(&g.proton_dir)]),
                     GameKind::Linux => tr("Linux native"),
                 };
+                if let Some(link) = &g.store {
+                    kind = format!("{kind} · {}", link.store.name());
+                }
                 ui.label(egui::RichText::new(kind).color(pal().subtext).small());
                 ui.add(
                     egui::Label::new(egui::RichText::new(disp(&g.name)).size(30.0).strong().color(pal().text))
@@ -7373,6 +7419,19 @@ fn play_triangle(painter: &egui::Painter, c: egui::Pos2, size: f32, color: egui:
 }
 
 impl Settings {
+    /// The install folder for a store's games.
+    fn store_dir(&self, store: stores::Store) -> PathBuf {
+        let (set, default) = match store {
+            stores::Store::Epic => (&self.epic_dir, "Games/Epic"),
+            stores::Store::Gog => (&self.gog_dir, "Games/GOG"),
+        };
+        if set.is_empty() {
+            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(default)
+        } else {
+            PathBuf::from(set)
+        }
+    }
+
     /// The tile size key in effect ("medium" when unset).
     fn tile_size_key(&self) -> &str {
         if TILE_SIZES.iter().any(|(k, ..)| *k == self.tile_size) { &self.tile_size } else { "medium" }
@@ -7681,6 +7740,13 @@ impl App {
                 if r.clicked() {
                     self.page = Page::Library;
                 }
+                let r = nav_item(ui, self.page == Page::Stores, "Stores", None);
+                if self.page == Page::Stores {
+                    selected = Some(r.rect);
+                }
+                if r.clicked() {
+                    self.page = Page::Stores;
+                }
                 if nav_item(ui, false, "Couch mode", None).on_hover_text(tr("Fullscreen, for the sofa and a controller (F11 or the Guide button)")).clicked() {
                     self.couch_toggle(&ctx);
                 }
@@ -7888,6 +7954,7 @@ impl App {
                                 Page::Dependencies => self.page_dependencies(ui, acts),
                                 Page::Proton => self.page_proton(ui, &ctx, acts),
                                 Page::Saves => self.page_saves(ui, &ctx, acts),
+                                Page::Stores => self.page_stores(ui, &ctx, acts),
                             }));
                         });
                 });
@@ -7914,6 +7981,7 @@ impl App {
         self.scan_poll();
         self.hltb_poll();
         self.store_poll(&ctx);
+        self.stores_poll(&ctx);
         self.opti_poll();
         self.poll_tasks(&ctx);
         self.art_poll(&ctx);
@@ -7990,6 +8058,7 @@ impl App {
         }
         self.steam_import_modal(&ctx);
         self.collection_modal(&ctx);
+        self.stores_modals(&ctx);
         self.apply_acts(&ctx, acts);
 
         if let Some(at) = self.zoom_save_at {
@@ -9103,6 +9172,58 @@ mod tests {
             h.idle(2);
             assert!(h.app.store.viewer.is_none() && h.app.page == Page::Game, "Escape closes the viewer only");
         }
+    }
+
+    /// The Stores page in each state (no network: a stand-in tool and account):
+    /// SHOTS=dir cargo test -- --ignored stores_shots --test-threads=1
+    #[test]
+    #[ignore]
+    fn stores_shots() {
+        use stores::{Installed, Owned, SizeInfo, Store};
+        let mut h = Harness::new("stores");
+        h.app.page = Page::Stores;
+        h.page(Page::Stores);
+        h.shot("st1-no-tool.png");
+        // A stand-in tool: signed out shows the sign-in steps.
+        let tools = data_dir().join("tools");
+        fs::create_dir_all(&tools).unwrap();
+        fs::write(tools.join("legendary"), "#!/bin/sh\nexit 1\n").unwrap();
+        h.app.stores.code = "not a code".into();
+        h.idle(3);
+        h.shot("st2-sign-in.png");
+        h.app.stores.code.clear();
+        // Signed in, with a library (the refresh is marked done so nothing runs).
+        let cfg = std::env::var_os("HOME").map(PathBuf::from).unwrap().join(".config/legendary");
+        fs::create_dir_all(&cfg).unwrap();
+        fs::write(cfg.join("user.json"), r#"{"displayName":"Tester","account_id":"x"}"#).unwrap();
+        h.app.stores.loaded.insert(Store::Epic);
+        let owned = |app: &str, title: &str, version: &str| Owned { app: app.into(), title: title.into(), version: version.into(), ..Default::default() };
+        h.app.stores.owned.insert(Store::Epic, vec![owned("Fortnite", "Fortnite", "2"), owned("Hades", "Hades", "1"), owned("Control", "Control", "5"), owned("Celeste", "Celeste", "1")]);
+        h.app.stores.installed.insert(Store::Epic, vec![
+            Installed { app: "Hades".into(), title: "Hades".into(), path: "/games/Hades".into(), version: "1".into() },
+            Installed { app: "Control".into(), title: "Control".into(), path: "/games/Control".into(), version: "4".into() },
+        ]);
+        h.idle(3);
+        h.shot("st3-library.png");
+        h.app.stores.show = stores_ui::Show::Updates;
+        h.idle(2);
+        h.shot("st4-updates.png");
+        h.app.stores.show = stores_ui::Show::All;
+        h.app.stores.confirm = Some((Store::Epic, owned("Celeste", "Celeste", "1"), Some(Ok(SizeInfo { download: 1_200_000_000, disk: 1_650_000_000, folder: "Celeste".into() }))));
+        h.idle(3);
+        h.shot("st5-install.png");
+        h.app.stores.confirm = None;
+        h.app.stores.uninstall = Some((Store::Epic, Installed { app: "Hades".into(), title: "Hades".into(), path: "/games/Hades".into(), version: "1".into() }, true));
+        h.idle(3);
+        h.shot("st6-uninstall.png");
+        h.app.stores.uninstall = None;
+        h.app.cfg.settings.language = "ar".into();
+        h.idle(3);
+        h.shot("st7-library-ar.png");
+        h.app.stores.tab = Store::Gog;
+        h.idle(3);
+        h.shot("st8-gog-ar.png");
+        h.app.cfg.settings.language = "en".into();
     }
 
     /// Statuses, collections and the list view:
