@@ -23,6 +23,7 @@ mod library_list;
 mod proton;
 mod quick;
 mod saves;
+mod safety;
 mod saves_ui;
 mod sessions;
 mod setup;
@@ -503,6 +504,9 @@ struct Settings {
     /// Folders scanned for ROMs (Emulation page).
     #[serde(default)]
     rom_dirs: Vec<String>,
+    /// When the last crash the user dismissed happened (unix time).
+    #[serde(default)]
+    crash_seen: u64,
     /// Performance flags new games start with (None = MangoHud + FSR4 upgrade).
     #[serde(default)]
     new_flags: Option<GameFlags>,
@@ -558,10 +562,17 @@ fn config_path() -> PathBuf {
 }
 
 fn load_config() -> AppConfig {
-    let mut cfg: AppConfig = fs::read_to_string(config_path())
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
+    load_config_noting().0
+}
+
+/// The config, and — if it was damaged — the backup used and where the
+/// damaged file was put.
+fn load_config_noting() -> (AppConfig, Option<(Option<PathBuf>, PathBuf)>) {
+    let (mut cfg, restored) = match safety::load(&config_path()) {
+        safety::Loaded::Fine(c) => (c, None),
+        safety::Loaded::Fresh => (AppConfig::default(), None),
+        safety::Loaded::Restored(c, backup, aside) => (c, Some((backup, aside))),
+    };
     // Games saved before ids existed get one now.
     let mut changed = false;
     for g in &mut cfg.custom_games {
@@ -573,7 +584,7 @@ fn load_config() -> AppConfig {
     if changed {
         save_config(&cfg);
     }
-    cfg
+    (cfg, restored)
 }
 
 /// A short random hex id for a new game.
@@ -964,11 +975,11 @@ fn save_config(cfg: &AppConfig) {
     if let Some(dir) = p.parent() {
         let _ = fs::create_dir_all(dir);
     }
-    if let Err(e) = fs::write(&p, serde_json::to_string_pretty(cfg).unwrap_or_default()) {
+    safety::daily_backup(&p);
+    // Private: the config may hold the SteamGridDB API key.
+    if let Err(e) = safety::write_atomic(&p, &serde_json::to_string_pretty(cfg).unwrap_or_default(), true) {
         eprintln!("gamelo: config save failed: {e}");
     }
-    // The config may hold the SteamGridDB API key.
-    let _ = fs::set_permissions(&p, fs::Permissions::from_mode(0o600));
 }
 
 fn slugify(s: &str) -> String {
@@ -2999,6 +3010,9 @@ struct App {
     /// The launcher being removed (confirm dialog).
     launcher_remove: Option<&'static str>,
     emu: emulation::EmuState,
+    /// A banner: crash last time, or a damaged config restored.
+    safety_notice: Option<String>,
+    crash_at: Option<u64>,
     running: HashMap<String, RunMarker>,
     /// Games the user asked to stop, so their exit isn't reported as a crash.
     stopping: HashSet<String>,
@@ -3048,7 +3062,7 @@ struct App {
 impl App {
     fn new(steam_root: Option<PathBuf>) -> Self {
         let proton_tools = detect_proton_tools(steam_root.as_deref());
-        let cfg = load_config();
+        let (cfg, restored) = load_config_noting();
         let (art_tx, art_rx) = std::sync::mpsc::channel();
 
         let mut app = App {
@@ -3085,6 +3099,8 @@ impl App {
             launchers_due: Vec::new(),
             launcher_remove: None,
             emu: Default::default(),
+            safety_notice: None,
+            crash_at: None,
             running: scan_running(),
             stopping: HashSet::new(),
             children: Vec::new(),
@@ -3122,6 +3138,7 @@ impl App {
         };
         app.deps = app.dep_rows();
         app.sort = SortMode::from_key(&app.cfg.settings.library_sort);
+        app.startup_notices(restored);
         if app.cfg.custom_games.is_empty() && !app.cfg.settings.setup_done {
             app.setup = Some(setup::Setup::default());
         }
@@ -8253,7 +8270,9 @@ impl App {
                             // Keep content clear of the floating scroll bar on the right
                             // (right-to-left pages are flush against it otherwise).
                             let edge = egui::Margin { right: 12, ..Default::default() };
-                            egui::Frame::new().inner_margin(edge).show(ui, |ui| dir_ui(ui, |ui| match self.page {
+                            egui::Frame::new().inner_margin(edge).show(ui, |ui| dir_ui(ui, |ui| {
+                                self.safety_banner(ui);
+                                match self.page {
                                 Page::Home => self.page_home(ui, &ctx, acts),
                                 Page::Launchers => self.page_launchers(ui, &ctx, acts),
                                 Page::Emulation => self.page_emulation(ui, &ctx, acts),
@@ -8267,6 +8286,7 @@ impl App {
                                 Page::Saves => self.page_saves(ui, &ctx, acts),
                                 Page::Stores => self.page_stores(ui, &ctx, acts),
                                 Page::Cleanup => self.page_cleanup(ui, &ctx, acts),
+                                }
                             }));
                         });
                 });
@@ -8597,6 +8617,7 @@ fn brand_mark(ui: &egui::Ui, rect: egui::Rect) {
 }
 
 fn main() -> eframe::Result {
+    safety::install_crash_log();
     migrate_old_name();
     let steam_root = find_steam_root();
     let args: Vec<String> = std::env::args().collect();
@@ -9255,6 +9276,8 @@ mod tests {
         t: f64,
         out: PathBuf,
         home: PathBuf,
+        /// How soon the last frame asked to be drawn again.
+        repaint: Duration,
     }
 
     impl Harness {
@@ -9297,7 +9320,7 @@ mod tests {
             app.cfg.settings.no_store = true; // no network in screenshots
             app.sort = SortMode::Recent;
             app.cfg.custom_games.iter_mut().for_each(|g| g.favorite = false);
-            Harness { ctx, app, raster: Raster::new(1240, 860), t: 0.0, out, home }
+            Harness { ctx, app, raster: Raster::new(1240, 860), t: 0.0, out, home, repaint: Duration::MAX }
         }
 
         fn frame_dt(&mut self, dt: f64, events: Vec<egui::Event>, name: Option<&str>) {
@@ -9310,6 +9333,7 @@ mod tests {
             };
             let app = &mut self.app;
             let mut output = self.ctx.run_ui(input, |ui| app.draw(ui));
+            self.repaint = output.viewport_output.get(&egui::ViewportId::ROOT).map_or(Duration::MAX, |v| v.repaint_delay);
             self.raster.apply(&output.textures_delta);
             output.textures_delta.clear();
             let prims = self.ctx.tessellate(output.shapes, output.pixels_per_point);
@@ -9739,6 +9763,29 @@ mod tests {
         h.app.cfg.settings.language = "en".into();
     }
 
+    /// Every page goes quiet when nothing moves (no repaint loop burning CPU):
+    /// cargo test -- --ignored idle_pages --test-threads=1
+    #[test]
+    #[ignore]
+    fn idle_pages() {
+        let mut h = Harness::new("idle");
+        h.app.cfg.settings.no_store = true;
+        let mut busy = Vec::new();
+        for page in [Page::Home, Page::Library, Page::Stats, Page::Stores, Page::Launchers, Page::Emulation, Page::Settings, Page::Proton, Page::Cleanup, Page::Dependencies] {
+            h.app.page = page;
+            // Let entrance animations and loads settle, with the pointer away.
+            h.frame_dt(0.5, vec![egui::Event::PointerGone], None);
+            for _ in 0..40 {
+                h.frame_dt(0.5, vec![], None);
+            }
+            if h.repaint < Duration::from_millis(500) {
+                let causes: Vec<String> = h.ctx.repaint_causes().iter().map(|c| c.to_string()).collect();
+                busy.push(format!("{page:?}: {:?} {causes:?} busy={} looping={}", h.repaint, h.app.motion.busy, h.app.motion.looping));
+            }
+        }
+        assert!(busy.is_empty(), "pages still repainting while idle: {busy:?}");
+    }
+
     /// The Emulation page with a few stand-in ROMs:
     /// SHOTS=dir cargo test -- --ignored emulation_shots --test-threads=1
     #[test]
@@ -9833,6 +9880,12 @@ mod tests {
         h.idle(3);
         h.shot("p6-setup-games.png");
         h.app.setup = None;
+        h.app.crash_at = Some(1);
+        h.app.safety_notice = Some(i18n::logical("Gamelo closed unexpectedly last time. The crash log can help fix it.").into());
+        h.page(Page::Home);
+        h.shot("p7-crash-banner.png");
+        h.app.safety_notice = None;
+        h.app.crash_at = None;
     }
 
     /// Home and Stats with two months of made-up sessions:
@@ -10342,5 +10395,56 @@ mod tests {
         assert!(!cmd.contains("PROTONPATH"));
         assert!(cmd.contains("mangohud "));
         assert!(cmd.contains("native-run"));
+    }
+}
+
+#[cfg(test)]
+mod startup_timing {
+    use super::*;
+
+    /// How long start-up takes on this machine:
+    /// cargo test --release -- --ignored startup_time --nocapture
+    #[test]
+    #[ignore]
+    fn startup_time() {
+        let t = Instant::now();
+        let steam = find_steam_root();
+        eprintln!("steam root: {:?}", t.elapsed());
+        let t = Instant::now();
+        let _ = detect_proton_tools(steam.as_deref());
+        eprintln!("proton tools: {:?}", t.elapsed());
+        let t = Instant::now();
+        let _ = load_config();
+        eprintln!("config: {:?}", t.elapsed());
+        let t = Instant::now();
+        let app = App::new(steam);
+        eprintln!("App::new total: {:?}", t.elapsed());
+        let t = Instant::now();
+        let _ = app.dep_rows();
+        eprintln!("dep rows: {:?}", t.elapsed());
+        let ctx = egui::Context::default();
+        let t = Instant::now();
+        configure_style(&ctx);
+        eprintln!("fonts/style: {:?}", t.elapsed());
+        let mut app = app;
+        let t = Instant::now();
+        let _ = ctx.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1240.0, 860.0))), ..Default::default() }, |ui| app.draw(ui));
+        eprintln!("first frame: {:?}", t.elapsed());
+        let t = Instant::now();
+        let _ = ctx.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1240.0, 860.0))), ..Default::default() }, |ui| app.draw(ui));
+        eprintln!("second frame: {:?}", t.elapsed());
+        app.cfg.settings.no_store = true;
+        for page in [Page::Home, Page::Library, Page::Stats, Page::Stores, Page::Settings, Page::Emulation, Page::Launchers] {
+            app.page = page;
+            let input = || egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1240.0, 860.0))), ..Default::default() };
+            for _ in 0..5 {
+                let _ = ctx.run_ui(input(), |ui| app.draw(ui));
+            }
+            let t = Instant::now();
+            for _ in 0..10 {
+                let _ = ctx.run_ui(input(), |ui| app.draw(ui));
+            }
+            eprintln!("{page:?}: {:?} per frame", t.elapsed() / 10);
+        }
     }
 }

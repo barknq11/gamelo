@@ -170,7 +170,9 @@ impl App {
                     });
                 });
                 ui.add_space(4.0);
-                ui.label(egui::RichText::new(disp(&format_duration(stats_ui::this_week(days, today)))).size(28.0).strong().color(pal().text));
+                let week = stats_ui::this_week(days, today);
+                let big = if week > 0 { format_duration(week) } else { lg("Nothing yet").to_string() };
+                ui.label(egui::RichText::new(disp(&big)).size(28.0).strong().color(pal().text));
                 let (delta, color) = stats_ui::week_delta(days, today);
                 ui.label(egui::RichText::new(disp(&delta)).small().color(color));
                 ui.add_space(10.0);
