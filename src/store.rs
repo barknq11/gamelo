@@ -172,7 +172,7 @@ pub fn lookup(name: &str, umu_id: &str, lang: &str) -> Result<Option<Info>, Stri
 }
 
 /// Where a store image is kept on disk.
-fn image_path(url: &str) -> PathBuf {
+pub(crate) fn image_path(url: &str) -> PathBuf {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     url.hash(&mut h);

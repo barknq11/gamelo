@@ -2505,6 +2505,18 @@ fn tile_h() -> f32 {
     tile_w() * 1.5
 }
 
+/// How many posters fit across `avail`.
+fn grid_cols(avail: f32) -> f32 {
+    ((avail + 20.0) / (tile_w() + 20.0)).floor().max(1.0)
+}
+
+/// The gap that spreads the columns across the full width instead of
+/// leaving a ragged edge.
+fn grid_gap(avail: f32) -> f32 {
+    let cols = grid_cols(avail);
+    if cols > 1.0 { ((avail - cols * tile_w()) / (cols - 1.0)).clamp(20.0, 72.0) } else { 20.0 }
+}
+
 /// Follow the "tile size" setting (unknown or unset = medium).
 fn set_tile_size(key: &str) {
     let w = TILE_SIZES.iter().find(|(k, ..)| *k == key).map_or(150.0, |t| t.2);
@@ -4710,13 +4722,7 @@ impl App {
                 ui.label(egui::RichText::new(tr("Sort")).color(pal().subtext).small());
                 ui.add_space(10.0);
                 if let Some(k) = tile_size_toggle(ui, &self.cfg.settings) {
-                    if k == "list" {
-                        self.cfg.settings.library_view = "list".into();
-                    } else {
-                        self.cfg.settings.library_view = "grid".into();
-                        self.cfg.settings.tile_size = k.into();
-                    }
-                    save_config(&self.cfg);
+                    self.set_layout(k);
                 }
             });
         });
@@ -4769,10 +4775,9 @@ impl App {
             empty_hint(ui, why);
             return;
         }
-        // Spread the columns across the full width instead of leaving a ragged gap.
         let avail = ui.available_width() - 1.0;
-        let cols = ((avail + 20.0) / (tile_w() + 20.0)).floor().max(1.0);
-        let gap = if cols > 1.0 { ((avail - cols * tile_w()) / (cols - 1.0)).clamp(20.0, 72.0) } else { 20.0 };
+        let cols = grid_cols(avail);
+        let gap = grid_gap(avail);
         if self.cfg.settings.library_view == "list" {
             self.library_keys(ctx, &order, 1, acts);
             self.library_list(ui, ctx, &order, acts);
@@ -4805,6 +4810,17 @@ impl App {
                 add_tile(ui, rect, resp, acts);
             }
         });
+    }
+
+    /// A pick from the layout buttons: "list", or a grid tile size.
+    fn set_layout(&mut self, k: &str) {
+        if k == "list" {
+            self.cfg.settings.library_view = "list".into();
+        } else {
+            self.cfg.settings.library_view = "grid".into();
+            self.cfg.settings.tile_size = k.into();
+        }
+        save_config(&self.cfg);
     }
 
     /// Arrow keys move a focus ring over the grid; Enter opens the game's page
@@ -9396,6 +9412,7 @@ mod tests {
     #[test]
     #[ignore]
     fn stores_shots() {
+        const STORE_TILE: (f32, f32) = (600.0, 400.0);
         use stores::{Installed, Owned, SizeInfo, Store};
         let mut h = Harness::new("stores");
         h.app.page = Page::Stores;
@@ -9414,14 +9431,36 @@ mod tests {
         fs::create_dir_all(&cfg).unwrap();
         fs::write(cfg.join("user.json"), r#"{"displayName":"Tester","account_id":"x"}"#).unwrap();
         h.app.stores.loaded.insert(Store::Epic);
-        let owned = |app: &str, title: &str, version: &str| Owned { app: app.into(), title: title.into(), version: version.into(), ..Default::default() };
-        h.app.stores.owned.insert(Store::Epic, vec![owned("Fortnite", "Fortnite", "2"), owned("Hades", "Hades", "1"), owned("Control", "Control", "5"), owned("Celeste", "Celeste", "1")]);
+        // Covers from the copied library stand in for store art (already "downloaded").
+        let covers: Vec<String> = h.app.cfg.custom_games.iter().map(|g| g.cover.clone()).filter(|c| Path::new(c).is_file()).collect();
+        let owned = |app: &str, title: &str, version: &str| {
+            let k = app.len() % covers.len().max(1);
+            let cover = covers.get(k).map(|c| {
+                let url = format!("https://test/{app}.jpg");
+                let path = store::image_path(&url);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::copy(c, &path).unwrap();
+                url
+            });
+            Owned { app: app.into(), title: title.into(), version: version.into(), cover: cover.unwrap_or_default(), ..Default::default() }
+        };
+        h.app.stores.owned.insert(Store::Epic, vec![owned("Fortnite", "Fortnite", "2"), owned("Hades", "Hades", "1"), owned("Control", "Control", "5"), owned("Celeste", "Celeste", "1"), owned("Alan", "Alan Wake 2", "1")]);
         h.app.stores.installed.insert(Store::Epic, vec![
             Installed { app: "Hades".into(), title: "Hades".into(), path: "/games/Hades".into(), version: "1".into() },
             Installed { app: "Control".into(), title: "Control".into(), path: "/games/Control".into(), version: "4".into() },
         ]);
         h.idle(3);
         h.shot("st3-library.png");
+        h.hover(egui::pos2(STORE_TILE.0, STORE_TILE.1));
+        h.shot("st3b-hover.png");
+        h.click(egui::pos2(STORE_TILE.0, STORE_TILE.1 + 40.0), egui::PointerButton::Secondary);
+        h.idle(3);
+        h.shot("st3c-menu.png");
+        h.key(egui::Key::Escape);
+        h.app.cfg.settings.library_view = "list".into();
+        h.idle(3);
+        h.shot("st3d-list.png");
+        h.app.cfg.settings.library_view = "grid".into();
         h.app.stores.show = stores_ui::Show::Updates;
         h.idle(2);
         h.shot("st4-updates.png");

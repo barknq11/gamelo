@@ -726,6 +726,8 @@ pub const AR: &[(&str, &str)] = &[
     ("That doesn't look like a sign-in code yet.", "لا يبدو هذا رمز تسجيل دخول بعد."),
     ("Your password never goes through ProtonLaunch: you sign in on the store's own page, and the code is only good for a few minutes.", "كلمة مرورك لا تمر عبر ProtonLaunch أبدًا: تسجّل الدخول في صفحة المتجر نفسه، والرمز صالح لدقائق قليلة فقط."),
     ("Account", "الحساب"),
+    ("{} installed", "{} مثبتة"),
+    ("Change install folder…", "تغيير مجلد التثبيت…"),
     ("Installed with Heroic", "مثبتة عبر Heroic"),
     ("Stores", "المتاجر"),
     ("Download", "التنزيل"),
