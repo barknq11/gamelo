@@ -33,6 +33,7 @@ mod stores;
 mod stores_ui;
 mod store;
 mod theme;
+mod tray;
 use i18n::{disp, fmt_logical as lfmt, logical as lg, rtl, tr, trf};
 use theme::{pal, rad};
 
@@ -2971,6 +2972,8 @@ struct App {
     quick: Option<quick::Quick>,
     /// First-run setup, while showing.
     setup: Option<setup::Setup>,
+    /// The tray icon and global shortcut (not in tests).
+    tray: Option<tray::TrayHandle>,
     running: HashMap<String, RunMarker>,
     /// Games the user asked to stop, so their exit isn't reported as a crash.
     stopping: HashSet<String>,
@@ -3052,6 +3055,7 @@ impl App {
             home: Default::default(),
             quick: None,
             setup: None,
+            tray: None,
             running: scan_running(),
             stopping: HashSet::new(),
             children: Vec::new(),
@@ -6521,6 +6525,21 @@ impl App {
         });
         ui.add_space(12.0);
 
+        // ---- Keyboard shortcuts
+        section_sub(ui, "Keyboard shortcuts", "Work anywhere in Gamelo; Meta+G works from anywhere on your desktop", |ui| {
+            for (keys, what) in [
+                ("Ctrl+K", "Find a game and play it"),
+                ("Ctrl+F", "Search the library"),
+                ("F11", "Couch mode (a controller's Guide button too)"),
+                ("Meta+G", "Show Gamelo — change it in your desktop's shortcut settings"),
+            ] {
+                modal_row(ui, keys, |ui| {
+                    ui.label(egui::RichText::new(tr(what)).color(pal().subtext));
+                });
+            }
+        });
+        ui.add_space(12.0);
+
         // ---- Storage
         if self.cache_bytes.is_none() {
             self.cache_bytes = Some(dir_size(&thumb_cache_dir()) + dir_size(&icons_dir()));
@@ -8290,6 +8309,7 @@ impl App {
         self.saves_modals(&ctx);
         self.hltb_modal(&ctx);
         self.quick_modal(&ctx, &mut acts);
+        self.tray_poll(&ctx, &mut acts);
         self.store_picker(&ctx);
         self.screenshot_viewer(&ctx);
         self.log_viewer(&ctx);
@@ -8565,6 +8585,8 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             configure_style(&cc.egui_ctx);
+            let mut app = app;
+            app.tray = Some(tray::TrayHandle::start(&cc.egui_ctx));
             Ok(Box::new(app))
         }),
     )

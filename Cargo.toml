@@ -20,6 +20,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 skrifa = "0.44"
 ar-reshaper = "1.5.0"
 unicode-bidi = "0.3.18"
+ksni = { version = "0.3.6", default-features = false, features = ["blocking", "async-io"] }
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 
 [profile.release]
 opt-level = "s"
