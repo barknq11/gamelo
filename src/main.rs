@@ -10,6 +10,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+mod cleanup;
 mod couch;
 mod extras;
 mod gamepad;
@@ -180,6 +181,56 @@ fn tokenize(s: &str) -> Vec<String> {
     out
 }
 
+/// Frame cap and MangoHud look for one game.
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Debug)]
+struct Tuning {
+    /// Frames per second; 0 = no cap.
+    #[serde(default)]
+    fps_limit: u32,
+    /// "" (MangoHud's own config), "minimal", "standard", "full" or "custom".
+    #[serde(default)]
+    overlay: String,
+    /// MangoHud position ("top-left", "top-right"…); "" = its default.
+    #[serde(default)]
+    position: String,
+    /// Custom MangoHud options, comma or line separated.
+    #[serde(default)]
+    custom: String,
+}
+
+/// Environment for a game's tuning. With MangoHud on and a preset chosen, it
+/// all goes into MANGOHUD_CONFIG (whose limiter works for every API).
+/// Otherwise the cap uses DXVK's and VKD3D's own limiters, so a MangoHud.conf
+/// the user keeps is never overridden.
+fn tuning_envs(t: &Tuning, mangohud: bool) -> Vec<(String, String)> {
+    let custom = t.custom.replace('\n', ",").split(',').map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(",");
+    let preset = match t.overlay.as_str() {
+        "minimal" => Some("fps_only".to_string()),
+        "standard" => Some("fps,frame_timing,cpu_stats,gpu_stats".to_string()),
+        "full" => Some("fps,frame_timing,cpu_stats,cpu_temp,cpu_mhz,gpu_stats,gpu_temp,gpu_core_clock,vram,ram".to_string()),
+        "custom" if !custom.is_empty() => Some(custom),
+        _ => None,
+    };
+    let mut v = Vec::new();
+    match preset.filter(|_| mangohud) {
+        Some(mut cfg) => {
+            if !t.position.is_empty() && !cfg.contains("position=") {
+                cfg.push_str(&format!(",position={}", t.position));
+            }
+            if t.fps_limit > 0 && !cfg.contains("fps_limit=") {
+                cfg.push_str(&format!(",fps_limit={}", t.fps_limit));
+            }
+            v.push(("MANGOHUD_CONFIG".to_string(), cfg));
+        }
+        None if t.fps_limit > 0 => {
+            v.push(("DXVK_FRAME_RATE".to_string(), t.fps_limit.to_string()));
+            v.push(("VKD3D_FRAME_RATE".to_string(), t.fps_limit.to_string()));
+        }
+        None => {}
+    }
+    v
+}
+
 fn flag_envs(f: &GameFlags) -> Vec<(&'static str, &'static str)> {
     let mut v = Vec::new();
     match f.fsr4 {
@@ -324,6 +375,8 @@ struct CustomGame {
     /// Names of the collections the game is in (see `Settings::collections`).
     #[serde(default)]
     collections: Vec<String>,
+    #[serde(default)]
+    tuning: Tuning,
     /// Installed from Epic or GOG: launched with fresh online parameters and
     /// cloud saves synced around each session.
     #[serde(default)]
@@ -2012,6 +2065,7 @@ fn build_launch(g: &CustomGame, settings: &Settings) -> Result<Launch, String> {
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
+    envs.extend(tuning_envs(&g.tuning, g.flags.mangohud));
 
     let mut wrappers: Vec<String> = Vec::new();
     // gamescope shows MangoHud itself (--mangoapp) when both are on.
@@ -2482,6 +2536,7 @@ enum GameAct {
     SetGamescope(GamescopeOpts),
     Favorite,
     SetStatus(GameStatus),
+    SetTuning(Tuning),
     ToggleCollection(String),
 }
 
@@ -2665,6 +2720,7 @@ struct ArtState {
 enum Page {
     Library,
     Stores,
+    Cleanup,
     Game,
     Artwork,
     Settings,
@@ -2852,6 +2908,7 @@ struct App {
     lib_keys: bool,
     lib_scroll: bool,
     stores: stores_ui::StoresState,
+    cleanup: cleanup::CleanupState,
     /// For store worker threads to wake the UI.
     stores_ctx: Option<egui::Context>,
     /// The new/rename collection dialog, when open.
@@ -2931,6 +2988,7 @@ impl App {
             lib_keys: false,
             lib_scroll: false,
             stores: stores_ui::StoresState::default(),
+            cleanup: cleanup::CleanupState::default(),
             stores_ctx: None,
             collection_edit: None,
             couch: None,
@@ -4202,6 +4260,10 @@ impl App {
                 self.cfg.custom_games[i].gamescope_opts = o;
                 save_config(&self.cfg);
             }
+            GameAct::SetTuning(t) => {
+                self.cfg.custom_games[i].tuning = t;
+                save_config(&self.cfg);
+            }
             GameAct::SetStatus(st) => {
                 self.cfg.custom_games[i].status = st;
                 save_config(&self.cfg);
@@ -5344,6 +5406,11 @@ impl App {
                 if gamescope_ui(ui, &mut o) {
                     acts.game.push((id.clone(), GameAct::SetGamescope(o)));
                 }
+            }
+            ui.add_space(10.0);
+            let mut t = g.tuning.clone();
+            if tuning_ui(ui, &mut t, g.flags.mangohud, g.kind == GameKind::Windows) {
+                acts.game.push((id.clone(), GameAct::SetTuning(t)));
             }
         });
         ui.add_space(12.0);
@@ -6608,6 +6675,70 @@ fn gamescope_ui(ui: &mut egui::Ui, o: &mut GamescopeOpts) -> bool {
     *o != before
 }
 
+/// FPS limit and MangoHud overlay rows. Returns true if anything changed.
+fn tuning_ui(ui: &mut egui::Ui, t: &mut Tuning, mangohud: bool, windows: bool) -> bool {
+    let before = t.clone();
+    const CAPS: [u32; 7] = [0, 30, 40, 60, 90, 120, 144];
+    modal_row(ui, "FPS limit", |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+            for cap in CAPS {
+                let label = if cap == 0 { tr("Off") } else { cap.to_string() };
+                if choice_chip(ui, t.fps_limit == cap, &label).clicked() {
+                    t.fps_limit = cap;
+                }
+            }
+            let custom = !CAPS.contains(&t.fps_limit);
+            if choice_chip(ui, custom, "Other").clicked() && !custom {
+                t.fps_limit = 75;
+            }
+            if custom {
+                ui.add(egui::DragValue::new(&mut t.fps_limit).range(10..=500).suffix(" fps"));
+            }
+        });
+    });
+    let how = match (t.fps_limit, mangohud && !t.overlay.is_empty(), windows) {
+        (0, _, _) => None,
+        (_, true, _) => Some("Capped by MangoHud."),
+        (_, false, true) => Some("Capped by DXVK/VKD3D (DirectX games). Pick an overlay style below to use MangoHud's limiter instead."),
+        (_, false, false) => Some("Native Linux games need MangoHud on (with an overlay style) for the cap."),
+    };
+    if let Some(how) = how {
+        note(ui, 128.0, how);
+    }
+    if mangohud {
+        ui.add_space(4.0);
+        modal_row(ui, "Overlay", |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                for (key, label) in [("", "Your MangoHud settings"), ("minimal", "Minimal"), ("standard", "Standard"), ("full", "Full"), ("custom", "Custom")] {
+                    if choice_chip(ui, t.overlay == key, label).clicked() {
+                        t.overlay = key.into();
+                    }
+                }
+            });
+        });
+        if !t.overlay.is_empty() {
+            modal_row(ui, "Position", |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                    for (key, label) in [("", "Default"), ("top-left", "Top left"), ("top-right", "Top right"), ("bottom-left", "Bottom left"), ("bottom-right", "Bottom right")] {
+                        if choice_chip(ui, t.position == key, label).clicked() {
+                            t.position = key.into();
+                        }
+                    }
+                });
+            });
+        }
+        if t.overlay == "custom" {
+            modal_row(ui, "Options", |ui| {
+                text_field(ui, &mut t.custom, "e.g. fps,gpu_temp,cpu_temp,vram", f32::INFINITY);
+            });
+        }
+    }
+    *t != before
+}
+
 /// The performance toggles. Returns true if any of them changed.
 fn flags_ui(ui: &mut egui::Ui, f: &mut GameFlags) -> bool {
     let before = *f;
@@ -7803,6 +7934,13 @@ impl App {
                         self.page = Page::Dependencies;
                     }
                 }
+                let r = nav_item(ui, self.page == Page::Cleanup, "Disk space", None);
+                if self.page == Page::Cleanup {
+                    selected = Some(r.rect);
+                }
+                if r.clicked() {
+                    self.page = Page::Cleanup;
+                }
                 let r = nav_item(ui, self.page == Page::Settings, "Settings", None);
                 if self.page == Page::Settings {
                     selected = Some(r.rect);
@@ -7955,6 +8093,7 @@ impl App {
                                 Page::Proton => self.page_proton(ui, &ctx, acts),
                                 Page::Saves => self.page_saves(ui, &ctx, acts),
                                 Page::Stores => self.page_stores(ui, &ctx, acts),
+                                Page::Cleanup => self.page_cleanup(ui, &ctx, acts),
                             }));
                         });
                 });
@@ -7982,6 +8121,7 @@ impl App {
         self.hltb_poll();
         self.store_poll(&ctx);
         self.stores_poll(&ctx);
+        self.cleanup_poll();
         self.opti_poll();
         self.poll_tasks(&ctx);
         self.art_poll(&ctx);
@@ -8681,6 +8821,12 @@ mod tests {
         // Typing in a field and then leaving through the sidebar must still save it.
         app.page = Page::Game;
         app.game_tab = GameTab::Settings;
+        // A fixed Performance card above Launch: no overlay rows, no frame cap.
+        if let Some(i) = app.selected_index() {
+            app.cfg.custom_games[i].flags.mangohud = false;
+            app.cfg.custom_games[i].flags.gamescope = false;
+            app.cfg.custom_games[i].tuning = Tuning::default();
+        }
         for _ in 0..2 {
             frame(&mut app, &mut raster, vec![], None);
         }
@@ -8689,8 +8835,12 @@ mod tests {
         for _ in 0..3 {
             frame(&mut app, &mut raster, vec![], None);
         }
-        frame(&mut app, &mut raster, vec![], None);
-        let args_field = egui::pos2(800.0, 752.0);
+        // Bring the Launch card's fields into view.
+        frame(&mut app, &mut raster, vec![egui::Event::PointerMoved(egui::pos2(700.0, 500.0)), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -200.0), phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel, modifiers: Default::default() }], None);
+        for _ in 0..6 {
+            frame(&mut app, &mut raster, vec![], None);
+        }
+        let args_field = egui::pos2(800.0, 616.0);
         frame(&mut app, &mut raster, click(args_field), None);
         frame(&mut app, &mut raster, release(args_field), None);
         frame(&mut app, &mut raster, vec![egui::Event::Text("-dx11".into())], None);
@@ -9174,6 +9324,56 @@ mod tests {
         }
     }
 
+    /// Per-game tuning rows and the Disk space page:
+    /// SHOTS=dir cargo test -- --ignored tune_shots --test-threads=1
+    #[test]
+    #[ignore]
+    fn tune_shots() {
+        let mut h = Harness::new("tune");
+        let id = h.app.cfg.custom_games.iter().find(|g| g.kind == GameKind::Windows).map(|g| g.id.clone()).unwrap();
+        let i = h.app.index_of(&id).unwrap();
+        h.app.cfg.custom_games[i].flags.mangohud = true;
+        h.app.cfg.custom_games[i].flags.gamescope = false;
+        h.app.cfg.custom_games[i].tuning = Tuning { fps_limit: 60, overlay: "standard".into(), position: "top-right".into(), custom: String::new() };
+        h.app.selected = Some(id.clone());
+        h.page(Page::Game);
+        h.app.game_tab = GameTab::Settings;
+        h.idle(2);
+        h.scroll(-380.0);
+        h.shot("t1-tuning.png");
+        let l = build_launch(&h.app.cfg.custom_games[i], &h.app.cfg.settings);
+        if let Ok(l) = l {
+            assert!(l.envs.iter().any(|(k, v)| k == "MANGOHUD_CONFIG" && v.contains("fps_limit=60") && v.contains("position=top-right")));
+        }
+        // A prefix no game uses, a shader cache and some logs to clean up.
+        let orphan = h.app.cfg.settings.prefix_base().join("old_game");
+        fs::create_dir_all(orphan.join("drive_c/users")).unwrap();
+        fs::write(orphan.join("system.reg"), vec![0u8; 3_000_000]).unwrap();
+        let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+        fs::create_dir_all(home.join(".cache/mesa_shader_cache")).unwrap();
+        fs::write(home.join(".cache/mesa_shader_cache/index"), vec![0u8; 5_000_000]).unwrap();
+        fs::create_dir_all(data_dir().join("logs")).unwrap();
+        fs::write(data_dir().join("logs/a.log"), "x".repeat(40_000)).unwrap();
+        h.page(Page::Cleanup);
+        for _ in 0..30 {
+            h.idle(1);
+            if h.app.cleanup.sizes.lock().unwrap().values().all(|v| v.is_some()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        h.shot("t2-disk-space.png");
+        assert!(h.app.orphan_prefixes().contains(&orphan));
+        // Moving it to the Trash takes it off the list.
+        let trash = home.join(".local/share/Trash");
+        assert!(cleanup::move_to_trash(&orphan).is_ok());
+        assert!(!orphan.exists() && (trash.join("files/old_game").is_dir() || find_in_path("gio").is_some()));
+        h.app.cfg.settings.language = "ar".into();
+        h.page(Page::Cleanup);
+        h.shot("t3-disk-space-ar.png");
+        h.app.cfg.settings.language = "en".into();
+    }
+
     /// The Stores page in each state (no network: a stand-in tool and account):
     /// SHOTS=dir cargo test -- --ignored stores_shots --test-threads=1
     #[test]
@@ -9604,6 +9804,21 @@ mod tests {
         assert!(cmd.contains("GAMEID=umu-test_game"));
         assert!(cmd.contains("umu-run"));
         assert!(cmd.ends_with("game.exe -windowed"));
+    }
+
+    #[test]
+    fn tuning_becomes_env() {
+        let t = |fps: u32, overlay: &str| Tuning { fps_limit: fps, overlay: overlay.into(), position: "top-right".into(), custom: "fps,\n gpu_temp".into() };
+        // No overlay preset: DXVK/VKD3D cap, MangoHud's own config untouched.
+        let e = tuning_envs(&t(60, ""), true);
+        assert!(e.contains(&("DXVK_FRAME_RATE".into(), "60".into())) && !e.iter().any(|(k, _)| k == "MANGOHUD_CONFIG"));
+        // A preset with MangoHud on: everything in MANGOHUD_CONFIG.
+        let e = tuning_envs(&t(90, "minimal"), true);
+        assert_eq!(e, vec![("MANGOHUD_CONFIG".to_string(), "fps_only,position=top-right,fps_limit=90".to_string())]);
+        assert_eq!(tuning_envs(&t(0, "custom"), true), vec![("MANGOHUD_CONFIG".to_string(), "fps,gpu_temp,position=top-right".to_string())]);
+        // MangoHud off: presets don't apply, the cap still does.
+        assert_eq!(tuning_envs(&t(30, "full"), false).len(), 2);
+        assert!(tuning_envs(&t(0, ""), true).is_empty());
     }
 
     #[test]
