@@ -728,13 +728,119 @@ pub fn steam_shortcuts(known: &[PathBuf]) -> Vec<SteamShortcut> {
     out
 }
 
+/// The `game:` section of a Lutris game config: (exe, prefix, args, working dir).
+pub fn lutris_game_section(yml: &str) -> (String, String, String, String) {
+    let (mut exe, mut prefix, mut args, mut dir) = (String::new(), String::new(), String::new(), String::new());
+    let mut in_game = false;
+    for line in yml.lines() {
+        if !line.starts_with(' ') && !line.trim().is_empty() {
+            in_game = line.trim_end() == "game:";
+            continue;
+        }
+        if !in_game {
+            continue;
+        }
+        let Some((k, v)) = line.trim().split_once(':') else { continue };
+        let v = v.trim().trim_matches(|c| c == '\'' || c == '"').to_string();
+        match k {
+            "exe" => exe = v,
+            "prefix" => prefix = v,
+            "args" => args = v,
+            "working_dir" => dir = v,
+            _ => {}
+        }
+    }
+    (exe, prefix, args, dir)
+}
+
+/// Installed Wine and native games from Lutris, as an import checklist.
+pub fn lutris_games(known: &[PathBuf]) -> Vec<SteamShortcut> {
+    let h = home();
+    let share = h.join(".local/share/lutris");
+    // Names and config files from Lutris's database (via sqlite3 when present).
+    let mut rows: Vec<(String, String, String)> = Vec::new();
+    let db = share.join("pga.db");
+    if db.is_file()
+        && let Ok(out) = Command::new("sqlite3")
+            .args(["-separator", "\t"])
+            .arg(&db)
+            .arg("select name, slug, configpath from games where installed = 1 and runner in ('wine', 'linux')")
+            .output()
+    {
+        for l in String::from_utf8_lossy(&out.stdout).lines() {
+            let mut f = l.split('\t');
+            if let (Some(n), Some(s), Some(c)) = (f.next(), f.next(), f.next()) {
+                rows.push((n.to_string(), s.to_string(), c.to_string()));
+            }
+        }
+    }
+    let config_dirs = [h.join(".config/lutris/games"), share.join("games")];
+    if rows.is_empty() {
+        // No database to read: name each config after its file ("hades-1690000000").
+        for d in &config_dirs {
+            for e in fs::read_dir(d).into_iter().flatten().flatten() {
+                let file = e.file_name().to_string_lossy().trim_end_matches(".yml").to_string();
+                let slug = file.rsplit_once('-').filter(|(_, n)| n.chars().all(|c| c.is_ascii_digit())).map_or(file.clone(), |(s, _)| s.to_string());
+                let name = slug.split('-').map(|w| w[..1].to_uppercase() + &w[1..]).collect::<Vec<_>>().join(" ");
+                rows.push((name, slug, file));
+            }
+        }
+    }
+    let art = |dirs: &[&str], slug: &str| {
+        dirs.iter().flat_map(|d| ["jpg", "png"].map(|x| share.join(d).join(format!("{slug}.{x}")))).find(|p| p.is_file())
+    };
+    let mut out = Vec::new();
+    for (name, slug, config) in rows {
+        let Some(yml) = config_dirs.iter().map(|d| d.join(format!("{config}.yml"))).find_map(|p| fs::read_to_string(p).ok()) else { continue };
+        let (exe, prefix, args, dir) = lutris_game_section(&yml);
+        let mut exe = PathBuf::from(&exe);
+        if exe.is_relative() && !prefix.is_empty() {
+            exe = Path::new(&prefix).join(&exe);
+        }
+        if !exe.is_file() || known.contains(&exe) {
+            continue;
+        }
+        let windows = exe.extension().is_some_and(|x| x.eq_ignore_ascii_case("exe"));
+        out.push(SteamShortcut {
+            include: true,
+            name,
+            start_dir: dir,
+            args,
+            env: String::new(),
+            mangohud: false,
+            gamemode: false,
+            prefix: (windows && Path::new(&prefix).is_dir()).then(|| PathBuf::from(&prefix)),
+            keep_prefix: true,
+            cover: art(&["coverart"], &slug),
+            hero: art(&["banners"], &slug),
+            icon: None,
+            proton: None,
+            exe,
+        });
+    }
+    out.sort_by_key(|s| s.name.to_lowercase());
+    out
+}
+
 impl App {
+    pub fn open_lutris_import(&mut self) {
+        let known: Vec<PathBuf> = self.cfg.custom_games.iter().map(|g| PathBuf::from(&g.exe)).collect();
+        let found = lutris_games(&known);
+        if found.is_empty() {
+            self.set_status(lg("No new games found in Lutris").into(), false);
+        } else {
+            self.import_lutris = true;
+            self.steam_import = Some(found);
+        }
+    }
+
     pub fn open_steam_import(&mut self) {
         let known: Vec<PathBuf> = self.cfg.custom_games.iter().map(|g| PathBuf::from(&g.exe)).collect();
         let found = steam_shortcuts(&known);
         if found.is_empty() {
             self.set_status(lg("No new non-Steam games found in Steam").into(), false);
         } else {
+            self.import_lutris = false;
             self.steam_import = Some(found);
         }
     }
@@ -746,8 +852,14 @@ impl App {
         let resp = egui::Modal::new(egui::Id::unique("steam-import")).show(ctx, |ui| {
             dir_ui(ui, |ui| {
                 ui.set_width(640.0);
-                ui.label(egui::RichText::new(tr("Import from Steam")).size(18.0).strong().color(pal().text));
-                para(ui, "Non-Steam games you added to Steam. Keeping Steam's prefix means their saves and settings come along untouched.", pal().subtext, true);
+                let lutris = self.import_lutris;
+                let title = if lutris { "Import from Lutris" } else { "Import from Steam" };
+                ui.label(egui::RichText::new(tr(title)).size(18.0).strong().color(pal().text));
+                if lutris {
+                    para(ui, "Games installed with Lutris. Keeping their prefix means saves and settings come along untouched.", pal().subtext, true);
+                } else {
+                    para(ui, "Non-Steam games you added to Steam. Keeping Steam's prefix means their saves and settings come along untouched.", pal().subtext, true);
+                }
                 ui.add_space(8.0);
                 egui::ScrollArea::vertical().max_height((ctx.content_rect().height() - 300.0).max(200.0)).show(ui, |ui| {
                     for s in list.iter_mut() {
@@ -760,7 +872,7 @@ impl App {
                                     ui.add(egui::Label::new(egui::RichText::new(s.exe.display().to_string()).color(pal().subtext).small().monospace()).truncate());
                                     ui.horizontal_wrapped(|ui| {
                                         if s.prefix.is_some() {
-                                            check(ui, &mut s.keep_prefix, tr("Keep Steam's prefix (saves stay put)"));
+                                            check(ui, &mut s.keep_prefix, tr(if lutris { "Keep its Lutris prefix (saves stay put)" } else { "Keep Steam's prefix (saves stay put)" }));
                                         }
                                         if s.cover.is_some() {
                                             pill(ui, "artwork", pal().accent);
@@ -1089,6 +1201,16 @@ mod tests {
         for s in steam_shortcuts(&known) {
             eprintln!("{:28} prefix={} cover={} proton={:?} args={:?} env={:?} mh={}", s.name, s.prefix.is_some(), s.cover.is_some(), s.proton, s.args, s.env, s.mangohud);
         }
+    }
+
+    #[test]
+    fn lutris_configs_are_read() {
+        let yml = "game:\n  exe: /games/Hades/Hades.exe\n  prefix: '/home/me/Games/hades'\n  args: -dx11\nsystem:\n  exe: /wrong\nwine:\n  version: lutris-GE\n";
+        let (exe, prefix, args, dir) = lutris_game_section(yml);
+        assert_eq!(exe, "/games/Hades/Hades.exe");
+        assert_eq!(prefix, "/home/me/Games/hades");
+        assert_eq!(args, "-dx11");
+        assert_eq!(dir, "");
     }
 
     #[test]

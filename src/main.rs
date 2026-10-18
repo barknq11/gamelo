@@ -19,9 +19,11 @@ mod home;
 mod i18n;
 mod library_list;
 mod proton;
+mod quick;
 mod saves;
 mod saves_ui;
 mod sessions;
+mod setup;
 mod stats_ui;
 mod i18n_ar;
 mod optiscaler;
@@ -486,6 +488,9 @@ struct Settings {
     /// Don't download artwork automatically when a game is added.
     #[serde(default)]
     skip_auto_fetch: bool,
+    /// First-run setup was finished or skipped.
+    #[serde(default)]
+    setup_done: bool,
     /// Performance flags new games start with (None = MangoHud + FSR4 upgrade).
     #[serde(default)]
     new_flags: Option<GameFlags>,
@@ -2605,6 +2610,7 @@ struct Acts {
     scan: bool,
     /// List Steam's non-Steam games for importing.
     steam_import: bool,
+    lutris_import: bool,
     /// Open the new/rename collection dialog.
     collection: Option<CollectionEdit>,
     delete_collection: Option<String>,
@@ -2961,6 +2967,10 @@ struct App {
     /// Every session since tracking started (for Home and Stats).
     sessions: Vec<sessions::Session>,
     home: home::HomeState,
+    /// The Ctrl+K quick search, while open.
+    quick: Option<quick::Quick>,
+    /// First-run setup, while showing.
+    setup: Option<setup::Setup>,
     running: HashMap<String, RunMarker>,
     /// Games the user asked to stop, so their exit isn't reported as a crash.
     stopping: HashSet<String>,
@@ -3003,6 +3013,8 @@ struct App {
     extras: extras::ExtrasState,
     scan: extras::ScanState,
     steam_import: Option<Vec<extras::SteamShortcut>>,
+    /// The import checklist is showing Lutris games, not Steam's.
+    import_lutris: bool,
 }
 
 impl App {
@@ -3038,6 +3050,8 @@ impl App {
             stats: load_stats(),
             sessions: sessions::load(),
             home: Default::default(),
+            quick: None,
+            setup: None,
             running: scan_running(),
             stopping: HashSet::new(),
             children: Vec::new(),
@@ -3071,9 +3085,13 @@ impl App {
             extras: extras::ExtrasState::default(),
             scan: extras::ScanState::default(),
             steam_import: None,
+            import_lutris: false,
         };
         app.deps = app.dep_rows();
         app.sort = SortMode::from_key(&app.cfg.settings.library_sort);
+        if app.cfg.custom_games.is_empty() && !app.cfg.settings.setup_done {
+            app.setup = Some(setup::Setup::default());
+        }
         app
     }
 
@@ -4530,6 +4548,9 @@ impl App {
         if acts.steam_import {
             self.open_steam_import();
         }
+        if acts.lutris_import {
+            self.open_lutris_import();
+        }
         if let Some(edit) = acts.collection {
             self.collection_edit = Some(edit);
         }
@@ -4710,6 +4731,10 @@ impl App {
                     }
                     if ui.button(tr("Non-Steam games from Steam…")).on_hover_text(tr("Bring over games you added to Steam, with their prefixes and artwork")).clicked() {
                         acts.steam_import = true;
+                        ui.close();
+                    }
+                    if ui.button(tr("Games from Lutris…")).on_hover_text(tr("Bring over games you installed with Lutris, with their prefixes")).clicked() {
+                        acts.lutris_import = true;
                         ui.close();
                     }
                 }));
@@ -6576,6 +6601,11 @@ impl App {
                     .color(pal().faint)
                     .small(),
             );
+            ui.with_layout(far_end(), |ui| {
+                if ui.button(tr("Run first-time setup again")).clicked() {
+                    self.setup = Some(setup::Setup::default());
+                }
+            });
         });
         if save {
             acts.save_settings = true;
@@ -8251,6 +8281,7 @@ impl App {
             self.draw_desktop(ui, &ctx, &mut acts);
         }
 
+        self.setup_modal(&ctx, &mut acts);
         if let Some(m) = self.add_modal_ui(&ctx) {
             self.add_game(&ctx, m);
         }
@@ -8258,6 +8289,7 @@ impl App {
         self.proton_delete_modal(&ctx);
         self.saves_modals(&ctx);
         self.hltb_modal(&ctx);
+        self.quick_modal(&ctx, &mut acts);
         self.store_picker(&ctx);
         self.screenshot_viewer(&ctx);
         self.log_viewer(&ctx);
@@ -9618,6 +9650,41 @@ mod tests {
         h.idle(3);
         h.shot("st8-gog-ar.png");
         h.app.cfg.settings.language = "en".into();
+    }
+
+    /// Ctrl+K quick search and first-run setup:
+    /// SHOTS=dir cargo test -- --ignored polish_shots --test-threads=1
+    #[test]
+    #[ignore]
+    fn polish_shots() {
+        let mut h = Harness::new("polish");
+        h.page(Page::Library);
+        let ctrl = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+        let ev = |pressed| egui::Event::Key { key: egui::Key::K, physical_key: None, pressed, repeat: false, modifiers: ctrl };
+        h.frame_dt(0.1, vec![ev(true), ev(false)], None);
+        h.idle(3);
+        h.shot("p1-quick-empty.png");
+        h.frame_dt(0.1, vec![egui::Event::Text("re".into())], None);
+        h.idle(2);
+        h.key(egui::Key::ArrowDown);
+        h.idle(2);
+        h.shot("p2-quick-typed.png");
+        h.app.cfg.settings.language = "ar".into();
+        h.idle(3);
+        h.shot("p3-quick-ar.png");
+        h.key(egui::Key::Escape);
+        h.idle(2);
+        assert!(h.app.quick.is_none(), "Escape closes quick search");
+        h.app.setup = Some(setup::Setup::default());
+        h.idle(3);
+        h.shot("p4-setup-ar.png");
+        h.app.cfg.settings.language = "en".into();
+        h.idle(3);
+        h.shot("p5-setup-tools.png");
+        h.app.setup = Some(setup::Setup { step: 1 });
+        h.idle(3);
+        h.shot("p6-setup-games.png");
+        h.app.setup = None;
     }
 
     /// Home and Stats with two months of made-up sessions:
