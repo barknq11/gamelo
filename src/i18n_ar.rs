@@ -780,4 +780,8 @@ pub const AR: &[(&str, &str)] = &[
     ("Left behind by games you removed. They can hold save files, so they go to the Trash and can be restored from there.", "تركتها ألعاب أزلتها. قد تحتوي على ملفات حفظ، لذا تذهب إلى سلة المهملات ويمكن استعادتها منها."),
     ("They can be downloaded again any time from the Proton page.", "يمكن تنزيلها مجددًا في أي وقت من صفحة Proton."),
     ("Rebuilt as you play; the first launch after clearing may stutter for a while.", "يُعاد بناؤها أثناء اللعب؛ قد يتقطع أول تشغيل بعد المسح لبعض الوقت."),
+    ("VR", "الواقع الافتراضي"),
+    ("Let games use VR headsets (OpenXR)", "اسمح للألعاب باستخدام نظارات الواقع الافتراضي (OpenXR)"),
+    ("Leave off unless you play VR games: on some systems Proton's VR support crashes games as they start.", "اتركه متوقفًا إلا إذا كنت تلعب ألعاب الواقع الافتراضي: في بعض الأنظمة يتسبب دعم Proton للواقع الافتراضي في انهيار الألعاب عند بدئها."),
+    ("Proton's VR (OpenXR) support crashed as the game started — turn off Settings › Appearance › VR.", "انهار دعم Proton للواقع الافتراضي (OpenXR) عند بدء اللعبة — أوقف الإعدادات › المظهر › الواقع الافتراضي."),
 ];

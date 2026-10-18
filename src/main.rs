@@ -452,6 +452,11 @@ struct Settings {
     /// Turn off animations.
     #[serde(default)]
     reduce_motion: bool,
+    /// Let games use VR (Wine's OpenXR bridge). Off by default: on systems
+    /// without a working OpenXR runtime the bridge can crash DXVK as a game
+    /// starts (it probes OpenXR for extensions even in flat games).
+    #[serde(default)]
+    allow_openxr: bool,
     /// Don't navigate with a game controller.
     #[serde(default)]
     no_gamepad: bool,
@@ -2090,9 +2095,14 @@ fn build_launch(g: &CustomGame, settings: &Settings) -> Result<Launch, String> {
                 .umu_bin()
                 .ok_or_else(|| "umu-run not found (install umu-launcher)".to_string())?;
             umu_env(g, settings, &mut envs)?;
-            // OptiScaler is loaded in place of a system DLL, which Wine must allow.
-            if let Some(o) = optiscaler::dll_override(&g.id) {
-                envs.push(("WINEDLLOVERRIDES".into(), o));
+            // OptiScaler is loaded in place of a system DLL, which Wine must allow;
+            // the OpenXR bridge stays off unless VR is allowed (see Settings).
+            let overrides: Vec<String> = optiscaler::dll_override(&g.id)
+                .into_iter()
+                .chain((!settings.allow_openxr).then(|| "wineopenxr=d".to_string()))
+                .collect();
+            if !overrides.is_empty() {
+                envs.push(("WINEDLLOVERRIDES".into(), overrides.join(";")));
             }
             // MangoHud ships as a Vulkan layer inside the Steam runtime container,
             // so it is enabled by env rather than the host mangohud wrapper.
@@ -6164,6 +6174,13 @@ impl App {
             });
             note(ui, indent, "Applies on click. Ctrl + / Ctrl − / Ctrl 0 and Ctrl + scroll work anywhere and are remembered too.");
             ui.add_space(8.0);
+            modal_row(ui, "VR", |ui| {
+                if check(ui, &mut self.cfg.settings.allow_openxr, tr("Let games use VR headsets (OpenXR)")).changed() {
+                    save = true;
+                }
+            });
+            note(ui, indent, "Leave off unless you play VR games: on some systems Proton's VR support crashes games as they start.");
+            ui.add_space(8.0);
             modal_row(ui, "Controller", |ui| {
                 let mut on = !self.cfg.settings.no_gamepad;
                 if check(ui, &mut on, tr("Navigate with a game controller")).changed() {
@@ -9807,6 +9824,17 @@ mod tests {
     }
 
     #[test]
+    fn openxr_bridge_is_off_unless_vr_is_allowed() {
+        let (mut g, mut s) = windows_game("");
+        g.env = "WINEDLLOVERRIDES=dinput8=n,b".into();
+        let ov = |s: &Settings| build_launch(&g, s).unwrap().envs.into_iter().find(|(k, _)| k == "WINEDLLOVERRIDES").map(|(_, v)| v);
+        // Off by default, and the user's own overrides are added to it.
+        assert_eq!(ov(&s).as_deref(), Some("wineopenxr=d;dinput8=n,b"));
+        s.allow_openxr = true;
+        assert_eq!(ov(&s).as_deref(), Some("dinput8=n,b"));
+    }
+
+    #[test]
     fn tuning_becomes_env() {
         let t = |fps: u32, overlay: &str| Tuning { fps_limit: fps, overlay: overlay.into(), position: "top-right".into(), custom: "fps,\n gpu_temp".into() };
         // No overlay preset: DXVK/VKD3D cap, MangoHud's own config untouched.
@@ -9834,7 +9862,7 @@ mod tests {
         assert!(a.contains("umu-run"));
         assert!(!l.envs.iter().any(|(k, _)| k == "MANGOHUD"), "mangoapp replaces MANGOHUD");
         assert!(l.envs.contains(&("DXVK_HUD".into(), "fps".into())));
-        assert!(l.envs.contains(&("WINEDLLOVERRIDES".into(), "xinput1_3=n,b".into())));
+        assert!(l.envs.contains(&("WINEDLLOVERRIDES".into(), "wineopenxr=d;xinput1_3=n,b".into())));
         assert_eq!(parse_env("A=1\n=2\nB C=3\n"), vec![("A".to_string(), "1".to_string())]);
     }
 

@@ -43,6 +43,7 @@ const HINTS: &[(&str, &str)] = &[
     ("mscoree", ".NET is missing — install dotnet48 under Mods & fixes › Windows components."),
     ("VK_ERROR_DEVICE_LOST", "The GPU driver reset (Vulkan device lost) — try another Proton build or update your graphics driver."),
     ("vkCreateInstance failed", "Vulkan didn't start — check that your graphics driver's Vulkan support is installed."),
+    ("err:openxr:xrCreateInstance Exception", "Proton's VR (OpenXR) support crashed as the game started — turn off Settings › Appearance › VR."),
     ("Unhandled page fault", "The game crashed inside Wine — try another Proton build, or remove OptiScaler if it's installed."),
     ("Unhandled exception", "The game crashed inside Wine — try another Proton build, or remove OptiScaler if it's installed."),
     ("EasyAntiCheat", "The game uses Easy Anti-Cheat, which only works on Linux if the developer allows it."),
