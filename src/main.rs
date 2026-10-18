@@ -9490,6 +9490,8 @@ mod tests {
     #[ignore]
     fn stores_shots() {
         const STORE_TILE: (f32, f32) = (600.0, 400.0);
+        const ACCOUNT_CHIP: (f32, f32) = (960.0, 59.0);
+        const ACCOUNT_CHIP_AR: (f32, f32) = (260.0, 59.0);
         use stores::{Installed, Owned, SizeInfo, Store};
         let mut h = Harness::new("stores");
         h.app.page = Page::Stores;
@@ -9502,7 +9504,17 @@ mod tests {
         h.app.stores.code = "not a code".into();
         h.idle(3);
         h.shot("st2-sign-in.png");
+        h.app.stores.code = "0123456789abcdef0123456789abcdef".into();
+        h.app.stores.opened.insert(Store::Epic);
+        h.app.stores.errors.insert(Store::Epic, "the code has expired".into());
+        h.idle(3);
+        h.shot("st2b-code-ok.png");
+        h.app.stores.errors.clear();
         h.app.stores.code.clear();
+        h.app.cfg.settings.language = "ar".into();
+        h.idle(3);
+        h.shot("st2c-sign-in-ar.png");
+        h.app.cfg.settings.language = "en".into();
         // Signed in, with a library (the refresh is marked done so nothing runs).
         let cfg = std::env::var_os("HOME").map(PathBuf::from).unwrap().join(".config/legendary");
         fs::create_dir_all(&cfg).unwrap();
@@ -9538,6 +9550,19 @@ mod tests {
         h.idle(3);
         h.shot("st3d-list.png");
         h.app.cfg.settings.library_view = "grid".into();
+        h.click(egui::pos2(ACCOUNT_CHIP.0, ACCOUNT_CHIP.1), egui::PointerButton::Primary);
+        h.idle(4);
+        h.shot("st3e-account.png");
+        h.key(egui::Key::Escape);
+        h.app.cfg.settings.language = "ar".into();
+        h.idle(4);
+        h.click(egui::pos2(ACCOUNT_CHIP_AR.0, ACCOUNT_CHIP_AR.1), egui::PointerButton::Primary);
+        h.idle(4);
+        h.shot("st3g-account-ar.png");
+        h.app.cfg.settings.language = "en".into();
+        h.idle(2);
+        h.key(egui::Key::Escape);
+        h.idle(2);
         h.app.stores.show = stores_ui::Show::Updates;
         h.idle(2);
         h.shot("st4-updates.png");

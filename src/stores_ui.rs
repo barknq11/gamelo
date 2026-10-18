@@ -88,6 +88,8 @@ pub struct StoresState {
     pub heroic: Option<Vec<(Store, Installed, Option<PathBuf>)>>,
     /// GOG portrait covers by product id, fetched as tiles come into view.
     pub covers: HashMap<String, String>,
+    /// Stores whose sign-in page was opened (step 2 done).
+    pub opened: HashSet<Store>,
     pub tx: Sender<Msg>,
     pub rx: Receiver<Msg>,
 }
@@ -109,6 +111,7 @@ impl Default for StoresState {
             uninstall: None,
             heroic: None,
             covers: HashMap::new(),
+            opened: HashSet::new(),
             tx,
             rx,
         }
@@ -316,9 +319,9 @@ impl App {
             vcol(ui, |ui| {
                 ui.label(egui::RichText::new(tr("Stores")).size(24.0).strong().color(pal().text));
                 let sub = match account {
-                    Some(name) if owned > 0 => {
+                    Some(_) if owned > 0 => {
                         let games = if owned == 1 { lg("1 game").to_string() } else { lfmt("{} games", &[&owned]) };
-                        format!("{} · {games} · {}", trf("Signed in as {}", &[&name]), lfmt("{} installed", &[&installed]))
+                        format!("{} · {games} · {}", store.name(), lfmt("{} installed", &[&installed]))
                     }
                     Some(name) => trf("Signed in as {}", &[&name]),
                     None => tr("Your Epic Games and GOG libraries — install them here and play through Proton"),
@@ -334,33 +337,11 @@ impl App {
                 }
                 let Some(name) = account else { return };
                 ui.add_space(10.0);
-                ui.menu_button(tr("Account"), |ui| menu_ui(ui, |ui| {
-                    ui.label(egui::RichText::new(trf("Signed in as {}", &[&name])).small().color(pal().subtext));
-                    let dir = self.cfg.settings.store_dir(store);
-                    ui.label(egui::RichText::new(dir.to_string_lossy()).monospace().small().color(pal().faint));
-                    if let Some(free) = stores::free_space(&dir) {
-                        ui.label(egui::RichText::new(trf("{} free", &[&format_bytes(free)])).small().color(pal().faint));
-                    }
-                    if ui.button(tr("Change install folder…")).clicked() {
-                        ui.close();
-                        if let Some(p) = pick_folder(&tr("Install folder")) {
-                            let p = p.to_string_lossy().to_string();
-                            match store {
-                                Store::Epic => self.cfg.settings.epic_dir = p,
-                                Store::Gog => self.cfg.settings.gog_dir = p,
-                            }
-                            save_config(&self.cfg);
-                        }
-                    }
-                    ui.separator();
-                    if ui.button(egui::RichText::new(tr("Sign out")).color(pal().danger)).clicked() {
-                        let _ = stores::logout(store);
-                        self.stores.owned.remove(&store);
-                        self.stores.installed.remove(&store);
-                        self.stores.loaded.remove(&store);
-                        ui.close();
-                    }
-                }));
+                let chip = account_chip(ui, name);
+                egui::Popup::menu(&chip)
+                    .width(300.0)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .show(|ui| menu_ui(ui, |ui| self.account_panel(ui, store, name, owned, installed)));
                 let busy = self.stores.busy.contains(&format!("lib:{}", key(store)));
                 ui.add_enabled_ui(!busy, |ui| {
                     if ui.button(tr("Refresh")).clicked() {
@@ -374,47 +355,138 @@ impl App {
         });
     }
 
-    /// Getting the tool and signing in (shown until there's an account).
+    /// The panel behind the account chip: who's signed in, where games go,
+    /// and signing out (asked twice).
+    fn account_panel(&mut self, ui: &mut egui::Ui, store: Store, name: &str, owned: usize, installed: usize) {
+        ui.set_min_width(280.0);
+        ui.horizontal(|ui| {
+            let (r, _) = ui.allocate_exact_size(egui::vec2(44.0, 44.0), egui::Sense::hover());
+            avatar(ui.painter(), r.center(), 22.0, name);
+            ui.add_space(6.0);
+            vcol(ui, |ui| {
+                ui.label(egui::RichText::new(disp(name)).size(16.0).strong().color(pal().text));
+                ui.label(egui::RichText::new(trf("{} account", &[&store.name()])).small().color(pal().subtext));
+            });
+        });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            let games = if owned == 1 { lg("1 game").to_string() } else { lfmt("{} games", &[&owned]) };
+            pill(ui, &games, pal().subtext);
+            pill(ui, &lfmt("{} installed", &[&installed]), pal().ok);
+        });
+        ui.separator();
+        ui.label(egui::RichText::new(tr("Install folder")).small().color(pal().faint));
+        let dir = self.cfg.settings.store_dir(store);
+        ui.label(egui::RichText::new(dir.to_string_lossy()).monospace().small().color(pal().text));
+        ui.horizontal(|ui| {
+            if let Some(free) = stores::free_space(&dir) {
+                ui.label(egui::RichText::new(trf("{} free", &[&format_bytes(free)])).small().color(pal().subtext));
+            }
+            ui.with_layout(far_end(), |ui| {
+                if ui.small_button(tr("Change…")).clicked()
+                    && let Some(p) = pick_folder(&tr("Install folder"))
+                {
+                    let p = p.to_string_lossy().to_string();
+                    match store {
+                        Store::Epic => self.cfg.settings.epic_dir = p,
+                        Store::Gog => self.cfg.settings.gog_dir = p,
+                    }
+                    save_config(&self.cfg);
+                }
+            });
+        });
+        ui.separator();
+        let asking_id = egui::Id::unique(("sign-out-asking", key(store)));
+        let asking = ui.data(|d| d.get_temp::<bool>(asking_id)).unwrap_or(false);
+        if !asking {
+            if ui.button(egui::RichText::new(tr("Sign out…")).color(pal().danger)).clicked() {
+                ui.data_mut(|d| d.insert_temp(asking_id, true));
+            }
+            return;
+        }
+        para(ui, &lfmt("Sign out of {}? Installed games stay installed and in your library.", &[&store.name()]), pal().text, true);
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            if danger_button(ui, "Sign out").clicked() {
+                let _ = stores::logout(store);
+                self.stores.owned.remove(&store);
+                self.stores.installed.remove(&store);
+                self.stores.loaded.remove(&store);
+                self.stores.opened.remove(&store);
+                ui.data_mut(|d| d.remove::<bool>(asking_id));
+                ui.close();
+            }
+            if ui.button(tr("Cancel")).clicked() {
+                ui.data_mut(|d| d.remove::<bool>(asking_id));
+            }
+        });
+    }
+
+    /// Connecting a store, as three steps: get the helper tool, sign in on
+    /// the store's page, paste what it shows. Shown until there's an account.
     fn account_card(&mut self, ui: &mut egui::Ui, store: Store, has_tool: bool, acts: &mut Acts) {
         let tool_name = match store {
             Store::Epic => "legendary",
             Store::Gog => "gogdl",
         };
+        let code = stores::extract_code(store, &self.stores.code);
+        let opened = self.stores.opened.contains(&store) || !self.stores.code.trim().is_empty();
+        let current = if !has_tool { 1 } else if !opened { 2 } else { 3 };
         let error = self.stores.errors.get(&store).cloned();
-        section(ui, "Account", |ui| {
-            if !has_tool {
-                para(ui, &lfmt("Gamelo talks to {} through {}, a small open-source tool (the same one Heroic uses). It's downloaded from GitHub and checked before it's used.", &[&store.name(), &tool_name]), pal().subtext, true);
+        card_frame().inner_margin(egui::Margin::same(22)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                let (r, _) = ui.allocate_exact_size(egui::vec2(52.0, 52.0), egui::Sense::hover());
+                store_mark(ui.painter(), r, store);
                 ui.add_space(8.0);
+                vcol(ui, |ui| {
+                    ui.label(egui::RichText::new(trf("Connect {}", &[&store.name()])).size(19.0).strong().color(pal().text));
+                    para(ui, &lfmt("Bring your {} library into Gamelo: install, update and play your games through Proton.", &[&store.name()]), pal().subtext, true);
+                });
+            });
+            ui.add_space(18.0);
+
+            let state = |n: u8| if n < current { Step::Done } else if n == current { Step::Now } else { Step::Later };
+            // 1. The helper tool.
+            step_row(ui, 1, state(1), &lfmt("Get {}", &[&tool_name]), &lfmt("A small open-source helper (the same one Heroic uses) that talks to {}. Downloaded from GitHub and checked before it's used.", &[&store.name()]), |ui| {
                 let busy = self.stores.busy.contains(&format!("tool:{}", key(store)));
-                ui.horizontal(|ui| {
-                    ui.add_enabled_ui(!busy, |ui| {
-                        if primary_button(ui, &lfmt("Download {}", &[&tool_name])).clicked() {
-                            self.stores_job(format!("tool:{}", key(store)), move || Msg::Tool(store, stores::install_tool(store)));
-                        }
-                    });
-                    if busy {
-                        ui.spinner();
+                if has_tool {
+                    pill(ui, "Ready", pal().ok);
+                } else if busy {
+                    ui.spinner();
+                } else if primary_button(ui, &lfmt("Download {}", &[&tool_name])).clicked() {
+                    self.stores_job(format!("tool:{}", key(store)), move || Msg::Tool(store, stores::install_tool(store)));
+                }
+            });
+            // 2. The store's own sign-in page.
+            step_row(ui, 2, state(2), &lfmt("Sign in to {}", &[&store.name()]), "It opens in your browser. Sign in there as you normally would.", |ui| {
+                ui.add_enabled_ui(has_tool, |ui| {
+                    let label = trf("Open {} sign-in", &[&store.name()]);
+                    let clicked = if current == 2 { primary_button(ui, &label).clicked() } else { ui.button(label).clicked() };
+                    if clicked {
+                        acts.open = Some(store.login_url().to_string());
+                        self.stores.opened.insert(store);
                     }
                 });
-            } else {
-                let busy = self.stores.busy.contains(&format!("login:{}", key(store)));
-                ui.label(egui::RichText::new(tr("1. Open the sign-in page and sign in.")).color(pal().text));
-                ui.add_space(4.0);
-                if ui.button(trf("Open {} sign-in", &[&store.name()])).clicked() {
-                    acts.open = Some(store.login_url().to_string());
-                }
-                ui.add_space(10.0);
-                let hint = match store {
-                    Store::Epic => "2. The page then shows a line of text with \"authorizationCode\" — copy all of it (or just the code) and paste it here.",
-                    Store::Gog => "2. You land on a mostly blank page — copy its address from the address bar and paste it here.",
-                };
-                para(ui, hint, pal().text, true);
-                ui.add_space(4.0);
+            });
+            // 3. Paste what the page shows.
+            let hint = match store {
+                Store::Epic => "The page then shows a line of text with \"authorizationCode\" — copy all of it (or just the code) and paste it here.",
+                Store::Gog => "You land on a mostly blank page — copy its address from the address bar and paste it here.",
+            };
+            step_row(ui, 3, state(3), "Paste what the page shows", hint, |_| {});
+            ui.add_enabled_ui(has_tool, |ui| {
                 ui.horizontal(|ui| {
-                    let w = (ui.available_width() - button_width(ui, "Sign in") - 8.0).max(160.0);
+                    ui.add_space(STEP_INDENT);
+                    let busy = self.stores.busy.contains(&format!("login:{}", key(store)));
+                    let w = (ui.available_width() - button_width(ui, "Paste") - button_width(ui, "Sign in") - 20.0).max(160.0);
                     let (r, _) = text_field(ui, &mut self.stores.code, "Paste here", w);
-                    let code = stores::extract_code(store, &self.stores.code);
                     let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if ui.button(tr("Paste")).clicked()
+                        && let Some(text) = arboard::Clipboard::new().ok().and_then(|mut c| c.get_text().ok())
+                    {
+                        self.stores.code = text.trim().to_string();
+                    }
                     ui.add_enabled_ui(code.is_some() && !busy, |ui| {
                         if primary_button(ui, "Sign in").clicked() || (enter && code.is_some()) {
                             let code = code.clone().unwrap_or_default();
@@ -426,15 +498,35 @@ impl App {
                         ui.spinner();
                     }
                 });
-                if !self.stores.code.trim().is_empty() && stores::extract_code(store, &self.stores.code).is_none() {
-                    note(ui, 0.0, "That doesn't look like a sign-in code yet.");
+                if !self.stores.code.trim().is_empty() {
+                    ui.horizontal(|ui| {
+                        ui.add_space(STEP_INDENT);
+                        let (text, color) = if code.is_some() { ("That looks right — press Sign in.", pal().ok) } else { ("That doesn't look like a sign-in code yet.", pal().warn) };
+                        ui.label(egui::RichText::new(tr(text)).small().color(color));
+                    });
                 }
-                note(ui, 0.0, "Your password never goes through Gamelo: you sign in on the store's own page, and the code is only good for a few minutes.");
-            }
+            });
             if let Some(e) = &error {
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new(disp(e)).color(pal().warn).small());
+                ui.add_space(10.0);
+                egui::Frame::new()
+                    .inner_margin(egui::Margin::symmetric(12, 8))
+                    .corner_radius(rad(8))
+                    .fill(pal().warn.gamma_multiply(0.10))
+                    .stroke(egui::Stroke::new(1.0, pal().warn.gamma_multiply(0.45)))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        para(ui, &lfmt("Couldn't sign in: {}", &[&e.as_str()]), pal().warn, true);
+                    });
             }
+            ui.add_space(14.0);
+            ui.separator();
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                let (r, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                lock_icon(ui.painter(), r.center(), pal().faint);
+                ui.add_space(2.0);
+                vcol(ui, |ui| para(ui, "Your password never goes through Gamelo: you sign in on the store's own page, and the code is only good for a few minutes.", pal().faint, true));
+            });
         });
     }
 
@@ -927,4 +1019,115 @@ impl App {
             }
         }
     }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Step {
+    Done,
+    Now,
+    Later,
+}
+
+/// How far a step's text sits from the edge (past its number).
+const STEP_INDENT: f32 = 50.0;
+
+/// One step of connecting a store: its number (a tick once done), a title
+/// and a line of help, and its control at the far end.
+fn step_row(ui: &mut egui::Ui, n: u8, state: Step, title: &str, sub: &str, control: impl FnOnce(&mut egui::Ui)) {
+    let control_w = 230.0;
+    ui.horizontal_top(|ui| {
+        let (r, _) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::hover());
+        let p = ui.painter();
+        let c = r.center();
+        match state {
+            Step::Done => {
+                p.circle_filled(c, 14.0, pal().ok.gamma_multiply(0.18));
+                p.circle_stroke(c, 14.0, egui::Stroke::new(1.5, pal().ok));
+                check_mark(p, c, 12.0, pal().ok);
+            }
+            Step::Now => {
+                p.circle_filled(c, 14.0, pal().accent);
+                p.text(c, egui::Align2::CENTER_CENTER, n.to_string(), egui::FontId::proportional(14.0), pal().on_accent);
+            }
+            Step::Later => {
+                p.circle_stroke(c, 13.5, egui::Stroke::new(1.5, pal().border));
+                p.text(c, egui::Align2::CENTER_CENTER, n.to_string(), egui::FontId::proportional(14.0), pal().faint);
+            }
+        }
+        ui.add_space(12.0);
+        let text_w = (ui.available_width() - control_w).max(200.0);
+        ui.allocate_ui(egui::vec2(text_w, 0.0), |ui| {
+            vcol(ui, |ui| {
+                let color = if state == Step::Later { pal().faint } else { pal().text };
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new(tr(title)).size(15.0).strong().color(color));
+                para(ui, sub, if state == Step::Later { pal().faint } else { pal().subtext }, true);
+            });
+        });
+        ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 34.0), far_end(), control);
+    });
+    ui.add_space(14.0);
+}
+
+/// A tick centred on `c`, `s` wide.
+fn check_mark(p: &egui::Painter, c: egui::Pos2, s: f32, color: egui::Color32) {
+    let pts = vec![c + egui::vec2(-0.45, 0.0) * s, c + egui::vec2(-0.12, 0.32) * s, c + egui::vec2(0.45, -0.32) * s];
+    p.add(egui::Shape::line(pts, egui::Stroke::new(2.0, color)));
+}
+
+/// A small padlock centred on `c`.
+fn lock_icon(p: &egui::Painter, c: egui::Pos2, color: egui::Color32) {
+    let body = egui::Rect::from_center_size(c + egui::vec2(0.0, 2.5), egui::vec2(11.0, 8.0));
+    p.rect_filled(body, rad(2), color);
+    let pts: Vec<egui::Pos2> = (0..=12)
+        .map(|k| {
+            let a = std::f32::consts::PI * (1.0 + k as f32 / 12.0);
+            c + egui::vec2(3.5 * a.cos(), -1.5 + 3.5 * a.sin())
+        })
+        .collect();
+    p.add(egui::Shape::line(pts, egui::Stroke::new(1.6, color)));
+}
+
+/// A round avatar with the account's initial.
+fn avatar(p: &egui::Painter, c: egui::Pos2, r: f32, name: &str) {
+    p.circle_filled(c, r, pal().accent);
+    let initial: String = name.chars().next().map(|ch| ch.to_uppercase().collect()).unwrap_or_default();
+    p.text(c, egui::Align2::CENTER_CENTER, disp(&initial), egui::FontId::proportional(r * 1.0), pal().on_accent);
+}
+
+/// The store's tile: its initial on its colour (not the store's logo).
+fn store_mark(p: &egui::Painter, rect: egui::Rect, store: Store) {
+    let (bg, letter) = match store {
+        Store::Epic => (egui::Color32::from_rgb(0x2C, 0x2C, 0x33), "E"),
+        Store::Gog => (egui::Color32::from_rgb(0x6C, 0x2D, 0xB8), "G"),
+    };
+    p.rect_filled(rect, rad(14), bg);
+    p.rect_stroke(rect, rad(14), egui::Stroke::new(1.0, egui::Color32::from_white_alpha(28)), egui::StrokeKind::Inside);
+    p.text(rect.center(), egui::Align2::CENTER_CENTER, letter, egui::FontId::proportional(rect.height() * 0.5), egui::Color32::WHITE);
+}
+
+/// The signed-in account in the header: avatar, name and a caret. Opens the
+/// account panel.
+fn account_chip(ui: &mut egui::Ui, name: &str) -> egui::Response {
+    let font = egui::FontId::proportional(14.0);
+    let galley = ui.painter().layout_no_wrap(disp(name), font, pal().text);
+    let size = egui::vec2(galley.size().x + 64.0, 34.0);
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+    let p = ui.painter();
+    let fill = if resp.hovered() || open { pal().hover } else { pal().card2 };
+    p.rect_filled(rect, rad(255), fill);
+    p.rect_stroke(rect, rad(255), egui::Stroke::new(1.0, if open { pal().accent } else { pal().border }), egui::StrokeKind::Inside);
+    let (av, text_x, caret) = if rtl() {
+        (rect.right() - 17.0, rect.right() - 36.0 - galley.size().x, rect.left() + 16.0)
+    } else {
+        (rect.left() + 17.0, rect.left() + 36.0, rect.right() - 16.0)
+    };
+    avatar(p, egui::pos2(av, rect.center().y), 12.0, name);
+    p.galley(egui::pos2(text_x, rect.center().y - galley.size().y / 2.0), galley, pal().text);
+    let cy = rect.center().y;
+    let tri = vec![egui::pos2(caret - 4.0, cy - 2.0), egui::pos2(caret + 4.0, cy - 2.0), egui::pos2(caret, cy + 3.0)];
+    p.add(egui::Shape::convex_polygon(tri, pal().subtext, egui::Stroke::NONE));
+    resp
 }
