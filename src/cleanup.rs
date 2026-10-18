@@ -20,6 +20,8 @@ pub struct CleanupState {
     pub sizes: Sizes,
     /// Paths being trashed or cleared.
     pub busy: HashSet<PathBuf>,
+    /// The system package that installed a folder (looked up once).
+    pub owners: HashMap<PathBuf, Option<String>>,
     pub tx: Sender<(PathBuf, Result<String, String>)>,
     pub rx: Receiver<(PathBuf, Result<String, String>)>,
 }
@@ -27,7 +29,7 @@ pub struct CleanupState {
 impl Default for CleanupState {
     fn default() -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
-        CleanupState { sizes: Arc::default(), busy: HashSet::new(), tx, rx }
+        CleanupState { sizes: Arc::default(), busy: HashSet::new(), owners: HashMap::new(), tx, rx }
     }
 }
 
@@ -74,6 +76,31 @@ fn trash_manually(path: &Path, trash: &Path) -> Result<(), String> {
         let _ = fs::remove_file(trash.join("info").join(format!("{name}.trashinfo")));
         lfmt("Couldn't move it to the Trash: {}", &[&e])
     })
+}
+
+/// The system package that owns `path` (pacman, dpkg or rpm), if any.
+fn package_owner(path: &Path) -> Option<String> {
+    let run = |cmd: &str, args: &[&str]| -> Option<String> {
+        find_in_path(cmd)?;
+        let out = Command::new(cmd).args(args).arg(path).output().ok()?;
+        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string()).filter(|s| !s.is_empty())
+    };
+    run("pacman", &["-Qqo"])
+        .or_else(|| run("dpkg", &["-S"]).and_then(|s| s.split(':').next().map(str::to_string)))
+        .or_else(|| run("rpm", &["-qf", "--qf", "%{NAME}"]))
+}
+
+/// How to remove package `pkg` with this system's package manager.
+fn removal_command(pkg: &str) -> String {
+    if find_in_path("pacman").is_some() {
+        format!("sudo pacman -R {pkg}")
+    } else if find_in_path("apt").is_some() {
+        format!("sudo apt remove {pkg}")
+    } else if find_in_path("dnf").is_some() {
+        format!("sudo dnf remove {pkg}")
+    } else {
+        format!("sudo rpm -e {pkg}")
+    }
 }
 
 /// Empty a folder (it is recreated empty).
@@ -150,7 +177,8 @@ impl App {
         out
     }
 
-    /// Proton builds we installed that no game (nor the default) uses.
+    /// Proton builds no game (nor the default) uses, from Steam's
+    /// compatibility-tool folders (both ones you own and system ones).
     fn unused_protons(&self) -> Vec<(String, PathBuf)> {
         self.proton_tools
             .iter()
@@ -208,23 +236,51 @@ impl App {
         }
         ui.add_space(12.0);
 
-        // Proton builds nothing uses.
+        // Proton builds nothing uses. Ones a system package installed (under
+        // /usr) can only be removed with the package manager.
         let mut delete: Option<PathBuf> = None;
+        for (_, dir) in &protons {
+            if !proton::deletable(dir) && !self.cleanup.owners.contains_key(dir) {
+                self.cleanup.owners.insert(dir.clone(), package_owner(dir));
+            }
+        }
         section_sub(ui, "Proton builds no game uses", "They can be downloaded again any time from the Proton page.", |ui| {
             if protons.is_empty() {
                 ui.label(egui::RichText::new(tr("None — every installed build is in use.")).color(pal().subtext));
             }
             for (label, dir) in &protons {
                 let size = self.measured(ctx, dir);
-                freeable += size.unwrap_or(0);
+                let ours = proton::deletable(dir);
+                if ours {
+                    freeable += size.unwrap_or(0);
+                }
+                let remove_cmd = (!ours).then(|| match self.cleanup.owners.get(dir).cloned().flatten() {
+                    Some(pkg) => removal_command(&pkg),
+                    None => String::new(),
+                });
                 ui.horizontal(|ui| {
                     vcol(ui, |ui| {
                         ui.label(egui::RichText::new(label).color(pal().text));
-                        ui.label(egui::RichText::new(size.map_or_else(|| "…".into(), format_bytes)).small().color(pal().subtext));
+                        let detail = match &remove_cmd {
+                            None => size.map_or_else(|| "…".into(), format_bytes),
+                            Some(_) => lfmt("{} · installed by your system's package manager", &[&size.map_or_else(|| "…".into(), format_bytes)]),
+                        };
+                        ui.label(egui::RichText::new(disp(&detail)).small().color(pal().subtext));
                     });
-                    ui.with_layout(far_end(), |ui| {
-                        if ui.button(tr("Delete…")).clicked() {
-                            delete = Some(dir.clone());
+                    ui.with_layout(far_end(), |ui| match &remove_cmd {
+                        None => {
+                            if ui.button(tr("Delete…")).clicked() {
+                                delete = Some(dir.clone());
+                            }
+                        }
+                        Some(cmd) if !cmd.is_empty() => {
+                            if ui.button(tr("Copy")).on_hover_text(cmd).clicked() {
+                                acts.copy = Some(cmd.clone());
+                            }
+                            ui.label(egui::RichText::new(cmd).monospace().small().color(pal().subtext));
+                        }
+                        Some(_) => {
+                            ui.label(egui::RichText::new(tr("Remove it with your package manager")).small().color(pal().faint));
                         }
                     });
                 });

@@ -784,4 +784,9 @@ pub const AR: &[(&str, &str)] = &[
     ("Let games use VR headsets (OpenXR)", "اسمح للألعاب باستخدام نظارات الواقع الافتراضي (OpenXR)"),
     ("Leave off unless you play VR games: on some systems Proton's VR support crashes games as they start.", "اتركه متوقفًا إلا إذا كنت تلعب ألعاب الواقع الافتراضي: في بعض الأنظمة يتسبب دعم Proton للواقع الافتراضي في انهيار الألعاب عند بدئها."),
     ("Proton's VR (OpenXR) support crashed as the game started — turn off Settings › Appearance › VR.", "انهار دعم Proton للواقع الافتراضي (OpenXR) عند بدء اللعبة — أوقف الإعدادات › المظهر › الواقع الافتراضي."),
+    ("{} · installed by your system's package manager", "{} · مثبتة بواسطة مدير حزم النظام"),
+    ("Remove it with your package manager", "أزلها باستخدام مدير الحزم"),
+    ("system", "النظام"),
+    ("Installed by your system's package manager — remove it from there", "مثبتة بواسطة مدير حزم النظام — أزلها من هناك"),
+    ("That Proton build was installed by your system's package manager — remove it from there", "ثُبّت إصدار Proton هذا بواسطة مدير حزم النظام — أزله من هناك"),
 ];

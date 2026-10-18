@@ -472,6 +472,10 @@ impl App {
                             if is_default {
                                 pill(ui, "default", pal().accent);
                             }
+                            if !deletable(dir) && dir.starts_with("/usr") {
+                                let r = ui.scope(|ui| pill(ui, "system", pal().faint)).response;
+                                r.on_hover_text(tr("Installed by your system's package manager — remove it from there"));
+                            }
                         });
                         let used = match users.len() {
                             0 => tr("not used by any game"),
@@ -723,6 +727,12 @@ impl App {
     /// Delete-confirmation dialog for an installed Proton build.
     pub fn proton_delete_modal(&mut self, ctx: &egui::Context) {
         let Some(dir) = self.proton.confirm_delete.clone() else { return };
+        // Only builds in our own folders: system ones belong to the package manager.
+        if !deletable(&dir) {
+            self.proton.confirm_delete = None;
+            self.set_status(lg("That Proton build was installed by your system's package manager — remove it from there").into(), true);
+            return;
+        }
         let users: Vec<String> = self
             .cfg
             .custom_games
