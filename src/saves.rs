@@ -1098,7 +1098,7 @@ pub fn other_contexts(own_prefix: Option<&Path>, settings: &Settings) -> Vec<Ctx
         (h.join(".local/share/bottles/bottles"), "Bottles", 1),
         (h.join(".var/app/com.usebottles.bottles/data/bottles/bottles"), "Bottles", 1),
         (h.join(".var/app/com.heroicgameslauncher.hgl/config/heroic/Prefixes"), "Heroic", 2),
-        (settings.prefix_base(), "ProtonLaunch", 1),
+        (settings.prefix_base(), "Gamelo", 1),
     ];
     for (root, who, depth) in roots {
         let mut level = vec![root];
@@ -1270,7 +1270,7 @@ pub fn export_pack(gs: &GameSaves, dest_parent: &Path) -> Result<String, String>
     let dir = dest_parent.join(format!("{} saves", gs.game.name.replace('/', "_")));
     let info = write_set(&dir, &gs.game.name, "export", &resolved, &gs.ctx)?;
     let mut readme = format!(
-        "{} — saves exported by ProtonLaunch\n\nTo import on another Linux PC: ProtonLaunch → the game → Saves → Import from folder, and pick this folder.\n\nTo use them on Windows, copy the contents of each folder below to the Windows path shown:\n\n",
+        "{} — saves exported by Gamelo\n\nTo import on another Linux PC: Gamelo → the game → Saves → Import from folder, and pick this folder.\n\nTo use them on Windows, copy the contents of each folder below to the Windows path shown:\n\n",
         gs.game.name
     );
     for (n, e) in info.entries.iter().enumerate() {
@@ -1328,8 +1328,8 @@ pub fn before_launch(g: &CustomGame, settings: &Settings) -> PreSession {
     let mut gs = GameSaves::new(g, settings, index.as_deref());
     match sync_state(&gs, settings) {
         SyncState::Newer(_) => match pull_sync(&mut gs, settings) {
-            Ok(m) => eprintln!("protonlaunch: {m}"),
-            Err(e) => eprintln!("protonlaunch: sync pull failed: {e}"),
+            Ok(m) => eprintln!("gamelo: {m}"),
+            Err(e) => eprintln!("gamelo: sync pull failed: {e}"),
         },
         SyncState::Conflict(_) => {
             gs.vault.conflict = true;
@@ -1365,7 +1365,7 @@ pub fn after_session(g: &CustomGame, settings: &Settings, pre: PreSession) {
     if settings.save_auto_backup() && !gs.vault.no_auto_backup
         && let Err(e) = backup(&gs, lg("after playing"), settings.save_keep(), false)
     {
-        eprintln!("protonlaunch: backup failed: {e}");
+        eprintln!("gamelo: backup failed: {e}");
     }
     if !gs.vault.conflict
         && sync_dir_for(settings, g).is_some()
@@ -1373,7 +1373,7 @@ pub fn after_session(g: &CustomGame, settings: &Settings, pre: PreSession) {
         && !gs.resolved().is_empty()
         && let Err(e) = push_sync(&mut gs, settings)
     {
-        eprintln!("protonlaunch: sync push failed: {e}");
+        eprintln!("gamelo: sync push failed: {e}");
     }
 }
 

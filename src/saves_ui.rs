@@ -403,7 +403,7 @@ impl App {
             let auto = !view.gs.vault.no_auto_backup;
             let global_auto = settings.save_auto_backup();
             let any_saves = view.rows.iter().any(|r| !r.matches.is_empty() && !r.ignored);
-            section_sub(ui, "Backups", &lfmt("Kept in ProtonLaunch's own folder — the newest {} are kept", &[&keep]), |ui| {
+            section_sub(ui, "Backups", &lfmt("Kept in Gamelo's own folder — the newest {} are kept", &[&keep]), |ui| {
                 ui.horizontal(|ui| {
                     let mut on = auto;
                     if ui.add_enabled_ui(global_auto, |ui| check(ui, &mut on, tr("Back up after every session"))).inner
@@ -477,7 +477,7 @@ impl App {
         section_sub(
             ui,
             "Find saves elsewhere",
-            "Looks in Steam, Heroic, Lutris and Bottles prefixes, other ProtonLaunch prefixes and Windows drives",
+            "Looks in Steam, Heroic, Lutris and Bottles prefixes, other Gamelo prefixes and Windows drives",
             |ui| {
                 ui.horizontal(|ui| {
                     if ui.add_enabled(!scanning, egui::Button::new(if found.is_some() { tr("Scan again") } else { tr("Scan") })).clicked() {

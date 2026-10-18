@@ -383,7 +383,7 @@ impl App {
         let error = self.stores.errors.get(&store).cloned();
         section(ui, "Account", |ui| {
             if !has_tool {
-                para(ui, &lfmt("ProtonLaunch talks to {} through {}, a small open-source tool (the same one Heroic uses). It's downloaded from GitHub and checked before it's used.", &[&store.name(), &tool_name]), pal().subtext, true);
+                para(ui, &lfmt("Gamelo talks to {} through {}, a small open-source tool (the same one Heroic uses). It's downloaded from GitHub and checked before it's used.", &[&store.name(), &tool_name]), pal().subtext, true);
                 ui.add_space(8.0);
                 let busy = self.stores.busy.contains(&format!("tool:{}", key(store)));
                 ui.horizontal(|ui| {
@@ -429,7 +429,7 @@ impl App {
                 if !self.stores.code.trim().is_empty() && stores::extract_code(store, &self.stores.code).is_none() {
                     note(ui, 0.0, "That doesn't look like a sign-in code yet.");
                 }
-                note(ui, 0.0, "Your password never goes through ProtonLaunch: you sign in on the store's own page, and the code is only good for a few minutes.");
+                note(ui, 0.0, "Your password never goes through Gamelo: you sign in on the store's own page, and the code is only good for a few minutes.");
             }
             if let Some(e) = &error {
                 ui.add_space(6.0);
@@ -827,7 +827,7 @@ impl App {
         let busy = self.stores.busy.contains(&format!("heroic:{}", key(store)));
         let mut go = false;
         section(ui, "Installed with Heroic", |ui| {
-            para(ui, &lfmt("Found {} games: {}. Import them to play from ProtonLaunch — no download, and each keeps its Heroic prefix so saves carry over.", &[&todo.len(), &names.join(", ")]), pal().subtext, true);
+            para(ui, &lfmt("Found {} games: {}. Import them to play from Gamelo — no download, and each keeps its Heroic prefix so saves carry over.", &[&todo.len(), &names.join(", ")]), pal().subtext, true);
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(!busy, |ui| {
@@ -910,7 +910,7 @@ impl App {
                 ui.add_space(8.0);
                 para(ui, &lfmt("This deletes the game's files in {}. Cloud saves stay with {}.", &[&inst.path, &store.name()]), pal().subtext, true);
                 ui.add_space(8.0);
-                check(ui, &mut remove, tr("Also remove it from the ProtonLaunch library"));
+                check(ui, &mut remove, tr("Also remove it from the Gamelo library"));
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     go = danger_button(ui, "Uninstall").clicked();

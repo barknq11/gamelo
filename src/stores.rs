@@ -2,7 +2,7 @@
 //! sync cloud saves. The work is done by two open-source command-line tools
 //! (Heroic's builds of legendary for Epic and gogdl for GOG), downloaded on
 //! demand and checked against GitHub's published checksums. Games are still
-//! launched by ProtonLaunch through umu + Proton like any other game.
+//! launched by Gamelo through umu + Proton like any other game.
 //!
 //! Everything here blocks: call it from a worker thread.
 

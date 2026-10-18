@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Gamelo
+GenericName=Game Launcher
+Comment=Your games, in one place — Windows games on Linux, no Steam needed
+Exec=gamelo
+Icon=gamelo
+Terminal=false
+Categories=Game;
+Keywords=games;launcher;proton;wine;epic;gog;
+StartupNotify=true
+StartupWMClass=gamelo

@@ -1,4 +1,4 @@
-//! The Disk space page: what ProtonLaunch's files take up, and safe ways to
+//! The Disk space page: what Gamelo's files take up, and safe ways to
 //! free it. Prefixes left behind by removed games go to the desktop Trash
 //! (they can hold save files); caches and leftovers that rebuild themselves
 //! are deleted.
@@ -192,7 +192,7 @@ impl App {
     }
 
     pub fn page_cleanup(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, acts: &mut Acts) {
-        page_header(ui, "Disk space", "What ProtonLaunch's files take up, and what's safe to free");
+        page_header(ui, "Disk space", "What Gamelo's files take up, and what's safe to free");
         let playing = !self.running.is_empty();
         let orphans = self.orphan_prefixes();
         let protons = self.unused_protons();
@@ -342,7 +342,7 @@ impl App {
         }
         ui.add_space(12.0);
 
-        // ProtonLaunch's own leftovers.
+        // Gamelo's own leftovers.
         let leftovers = [
             ("Interrupted downloads", data_dir().join("downloads")),
             ("Game logs", data_dir().join("logs")),

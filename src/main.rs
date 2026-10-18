@@ -433,7 +433,7 @@ impl GameStatus {
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Settings {
-    /// Base directory for auto prefixes (empty = ~/.local/share/protonlaunch/prefixes).
+    /// Base directory for auto prefixes (empty = ~/.local/share/gamelo/prefixes).
     #[serde(default)]
     prefix_base: String,
     #[serde(default)]
@@ -531,7 +531,7 @@ struct AppConfig {
 }
 
 fn config_path() -> PathBuf {
-    home().join(".config/protonlaunch/config.json")
+    home().join(".config/gamelo/config.json")
 }
 
 fn load_config() -> AppConfig {
@@ -814,10 +814,10 @@ fn self_exe() -> PathBuf {
         .map(PathBuf::from)
         .filter(|p| p.is_file())
         .or_else(|| std::env::current_exe().ok())
-        .unwrap_or_else(|| PathBuf::from("protonlaunch"))
+        .unwrap_or_else(|| PathBuf::from("gamelo"))
 }
 
-/// Start `protonlaunch --run <id>` detached, so the game (and its playtime
+/// Start `gamelo --run <id>` detached, so the game (and its playtime
 /// tracking) outlives the window.
 fn spawn_runner(id: &str) -> Result<Child, String> {
     let mut cmd = Command::new(self_exe());
@@ -846,11 +846,11 @@ fn run_headless(id: &str) -> i32 {
         .iter()
         .find(|g| g.id == id || slugify(&g.name) == id)
     else {
-        eprintln!("protonlaunch: no game with id {id}");
+        eprintln!("gamelo: no game with id {id}");
         return 2;
     };
     if scan_running().contains_key(&g.id) {
-        eprintln!("protonlaunch: {} is already running", g.name);
+        eprintln!("gamelo: {} is already running", g.name);
         return 0;
     }
     // Pull newer saves from the sync folder and note the save folders' state.
@@ -860,7 +860,7 @@ fn run_headless(id: &str) -> i32 {
     if let Some(link) = g.store.clone() {
         let prefix = game_prefix(&g, &cfg.settings);
         if let Err(e) = stores::sync_saves(&link, &prefix, Path::new(&link.path), false) {
-            eprintln!("protonlaunch: cloud saves: {e}");
+            eprintln!("gamelo: cloud saves: {e}");
         }
         if link.store == stores::Store::Epic {
             let online = stores::epic_online_args(&link.app);
@@ -873,7 +873,7 @@ fn run_headless(id: &str) -> i32 {
     let (mut child, log) = match launch_game(g, &cfg.settings) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("protonlaunch: {e}");
+            eprintln!("gamelo: {e}");
             return 1;
         }
     };
@@ -902,7 +902,7 @@ fn run_headless(id: &str) -> i32 {
     if code.is_some_and(|c| c != 0) && secs < 30 {
         notify(
             &lfmt("{} closed after {}s", &[&g.name, &secs]),
-            lg("Open ProtonLaunch › the game › Last session › View log to see why."),
+            lg("Open Gamelo › the game › Last session › View log to see why."),
         );
     }
     // Back up and sync before the marker goes, so the window shows the game
@@ -911,7 +911,7 @@ fn run_headless(id: &str) -> i32 {
     if let Some(link) = &g.store
         && let Err(e) = stores::sync_saves(link, &game_prefix(g, &cfg.settings), Path::new(&link.path), true)
     {
-        eprintln!("protonlaunch: cloud saves: {e}");
+        eprintln!("gamelo: cloud saves: {e}");
     }
     let _ = fs::remove_file(&path);
     code.unwrap_or(1)
@@ -921,7 +921,7 @@ fn run_headless(id: &str) -> i32 {
 fn notify(title: &str, body: &str) {
     if find_in_path("notify-send").is_some() {
         let _ = Command::new("notify-send")
-            .args(["-a", "ProtonLaunch", "-i", "dialog-warning", title, body])
+            .args(["-a", "Gamelo", "-i", "dialog-warning", title, body])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -935,7 +935,7 @@ fn save_config(cfg: &AppConfig) {
         let _ = fs::create_dir_all(dir);
     }
     if let Err(e) = fs::write(&p, serde_json::to_string_pretty(cfg).unwrap_or_default()) {
-        eprintln!("protonlaunch: config save failed: {e}");
+        eprintln!("gamelo: config save failed: {e}");
     }
     // The config may hold the SteamGridDB API key.
     let _ = fs::set_permissions(&p, fs::Permissions::from_mode(0o600));
@@ -957,7 +957,7 @@ fn slugify(s: &str) -> String {
 }
 
 fn data_dir() -> PathBuf {
-    home().join(".local/share/protonlaunch")
+    home().join(".local/share/gamelo")
 }
 
 // ---------------------------------------------------------------------------
@@ -1450,7 +1450,7 @@ fn http_fetch_with(
             .arg("--retry")
             .arg("3")
             .arg("-A")
-            .arg("protonlaunch");
+            .arg("gamelo");
         match dest {
             Some(d) => {
                 c.arg("-o").arg(d);
@@ -1561,7 +1561,7 @@ fn github_latest_asset(
 }
 
 /// Download and install the latest GE-Proton build into the user's copy of Steam
-/// (when present) or into ~/.local/share/protonlaunch/proton.
+/// (when present) or into ~/.local/share/gamelo/proton.
 fn install_ge_proton(steam_root: Option<PathBuf>) -> Result<String, String> {
     let (name, url) = github_latest_asset("GloriousEggroll/proton-ge-custom", |n| {
         n.ends_with("-x86_64.tar.gz")
@@ -1841,7 +1841,7 @@ fn thumb_cache_dir() -> PathBuf {
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .unwrap_or_else(|| home().join(".cache"))
-        .join("protonlaunch/sgdb")
+        .join("gamelo/sgdb")
 }
 
 /// Download (or reuse a cached copy of) a thumbnail, scaled for the browser grid.
@@ -2297,13 +2297,13 @@ fn desktop_exec_arg(arg: &str) -> String {
 }
 
 /// Create a .desktop entry so the game shows up in the app menu. It runs the
-/// game through `protonlaunch --run`, so menu launches count towards playtime.
+/// game through `gamelo --run`, so menu launches count towards playtime.
 fn write_desktop_entry(g: &CustomGame, settings: &Settings) -> Result<PathBuf, String> {
     // Fail now (missing exe, no Proton…) rather than from the app menu later.
     build_launch(g, settings)?;
     let dir = home().join(".local/share/applications");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = dir.join(format!("protonlaunch-{}.desktop", g.id));
+    let path = dir.join(format!("gamelo-{}.desktop", g.id));
 
     let exec = format!("{} --run {}", desktop_exec_arg(&self_exe().to_string_lossy()), g.id);
 
@@ -2311,7 +2311,7 @@ fn write_desktop_entry(g: &CustomGame, settings: &Settings) -> Result<PathBuf, S
     s.push_str("[Desktop Entry]\n");
     s.push_str("Type=Application\n");
     s.push_str(&format!("Name={}\n", g.name.replace(['\n', '\r'], " ")));
-    s.push_str("Comment=Game launched by ProtonLaunch\n");
+    s.push_str("Comment=Game launched by Gamelo\n");
     s.push_str(&format!("Exec={exec}\n"));
     let cached_icon = icons_dir().join(format!("icon-{}.png", g.id));
     if !g.icon.is_empty() && Path::new(&g.icon).is_file() {
@@ -6482,7 +6482,7 @@ impl App {
             self.cache_bytes = Some(dir_size(&thumb_cache_dir()) + dir_size(&icons_dir()));
         }
         let cache = self.cache_bytes.unwrap_or(0);
-        section_sub(ui, "Storage", "Where ProtonLaunch keeps things", |ui| {
+        section_sub(ui, "Storage", "Where Gamelo keeps things", |ui| {
             let auto = data_dir().join("prefixes").to_string_lossy().to_string();
             let (mut browse, mut open) = (false, false);
             row_with_buttons(
@@ -6550,8 +6550,10 @@ impl App {
         });
         ui.add_space(12.0);
         ui.horizontal(|ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+            brand_mark(ui, rect);
             ui.label(
-                egui::RichText::new(format!("ProtonLaunch {}", env!("CARGO_PKG_VERSION")))
+                egui::RichText::new(format!("Gamelo {}", env!("CARGO_PKG_VERSION")))
                     .color(pal().faint)
                     .small(),
             );
@@ -7833,7 +7835,7 @@ impl eframe::App for App {
         let now = raw.time.unwrap_or(0.0);
         pad.drain(now);
         let (keys, scroll) = pad.nav.frame(now);
-        // Only while ProtonLaunch is in front: a running game has the controller.
+        // Only while Gamelo is in front: a running game has the controller.
         if !raw.focused {
             self.pad_scroll = 0.0;
             return;
@@ -7869,21 +7871,19 @@ impl App {
                 // Brand
                 ui.horizontal(|ui| {
                     let (rect, _) =
-                        ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
-                    let p = ui.painter();
-                    p.rect_filled(rect, rad(8), pal().accent);
-                    play_triangle(p, rect.center(), 9.0, pal().on_accent);
-                    ui.add_space(9.0);
+                        ui.allocate_exact_size(egui::vec2(34.0, 34.0), egui::Sense::hover());
+                    brand_mark(ui, rect);
+                    ui.add_space(8.0);
                     vcol(ui, |ui| {
                         ui.add_space(1.0);
                         ui.label(
-                            egui::RichText::new(tr("ProtonLaunch"))
-                                .size(15.5)
+                            egui::RichText::new("Gamelo")
+                                .size(17.0)
                                 .strong()
                                 .color(pal().text),
                         );
                         ui.label(
-                            egui::RichText::new(tr("Games without Steam"))
+                            egui::RichText::new(tr("Your games, in one place"))
                                 .size(11.5)
                                 .color(pal().faint),
                         );
@@ -8374,12 +8374,83 @@ fn configure_style(ctx: &egui::Context) {
     });
 }
 
+/// ProtonLaunch was renamed Gamelo. Move its folders over once, leaving a link
+/// at each old path so anything still pointing there (prefixes, Steam, logs)
+/// keeps working, and point saved paths and game shortcuts at the new names.
+fn migrate_old_name() {
+    let cache = thumb_cache_dir().parent().map(Path::to_path_buf).unwrap_or_default();
+    let old_data = home().join(".local/share/protonlaunch");
+    for (old, new) in [
+        (home().join(".config/protonlaunch"), config_path().parent().map(Path::to_path_buf).unwrap_or_default()),
+        (old_data.clone(), data_dir()),
+        (cache.with_file_name("protonlaunch"), cache),
+    ] {
+        if !new.exists() && old.is_dir() && !old.is_symlink() && fs::rename(&old, &new).is_ok() {
+            let _ = std::os::unix::fs::symlink(&new, &old);
+        }
+    }
+    let old_prefix = format!("{}/", old_data.display());
+    if let Ok(s) = fs::read_to_string(config_path())
+        && s.contains(&old_prefix)
+    {
+        let _ = fs::write(config_path(), s.replace(&old_prefix, &format!("{}/", data_dir().display())));
+    }
+    // Game shortcuts in the app menu; not from a development build, which
+    // would point them at itself.
+    let exe = self_exe();
+    if exe.components().any(|c| c.as_os_str() == "target") {
+        return;
+    }
+    let apps = home().join(".local/share/applications");
+    for e in fs::read_dir(&apps).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        let Some(id) = name.strip_prefix("protonlaunch-").and_then(|n| n.strip_suffix(".desktop")) else { continue };
+        let Ok(s) = fs::read_to_string(e.path()) else { continue };
+        let exec = format!("Exec={} --run {id}", desktop_exec_arg(&exe.to_string_lossy()));
+        let s: Vec<String> = s
+            .lines()
+            .map(|l| if l.starts_with("Exec=") { exec.clone() } else { l.replace("ProtonLaunch", "Gamelo") })
+            .collect();
+        if fs::write(apps.join(format!("gamelo-{id}.desktop")), s.join("\n") + "\n").is_ok() {
+            let _ = fs::remove_file(e.path());
+        }
+    }
+}
+
+/// The app icon, shared by the window, the sidebar and Settings.
+const ICON_PNG: &[u8] = include_bytes!("../packaging/gamelo.png");
+
+fn icon_rgba() -> image::RgbaImage {
+    image::load_from_memory(ICON_PNG).map(|i| i.to_rgba8()).unwrap_or_default()
+}
+
+/// The icon as a texture (made once, with mipmaps so it stays crisp small).
+fn brand_icon(ctx: &egui::Context) -> egui::TextureHandle {
+    let id = egui::Id::unique("gamelo-icon");
+    if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return t;
+    }
+    let img = icon_rgba();
+    let image = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], &img);
+    let options = egui::TextureOptions { mipmap_mode: Some(egui::TextureFilter::Linear), ..egui::TextureOptions::LINEAR };
+    let tex = ctx.load_texture("gamelo-icon", image, options);
+    ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
+    tex
+}
+
+/// Paint the app icon into `rect`.
+fn brand_mark(ui: &egui::Ui, rect: egui::Rect) {
+    let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+    ui.painter().image(brand_icon(ui.ctx()).id(), rect, uv, egui::Color32::WHITE);
+}
+
 fn main() -> eframe::Result {
+    migrate_old_name();
     let steam_root = find_steam_root();
     let args: Vec<String> = std::env::args().collect();
     if let Some(pos) = args.iter().position(|a| a == "--run") {
         let Some(id) = args.get(pos + 1) else {
-            eprintln!("usage: protonlaunch --run <game-id>");
+            eprintln!("usage: gamelo --run <game-id>");
             std::process::exit(2);
         };
         std::process::exit(run_headless(id));
@@ -8392,7 +8463,7 @@ fn main() -> eframe::Result {
         match install_ge_proton(steam_root.clone()) {
             Ok(msg) => println!("{msg}"),
             Err(e) => {
-                eprintln!("protonlaunch: {e}");
+                eprintln!("gamelo: {e}");
                 std::process::exit(1);
             }
         }
@@ -8402,7 +8473,7 @@ fn main() -> eframe::Result {
         match install_umu() {
             Ok(msg) => println!("{msg}"),
             Err(e) => {
-                eprintln!("protonlaunch: {e}");
+                eprintln!("gamelo: {e}");
                 std::process::exit(1);
             }
         }
@@ -8413,11 +8484,17 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1120.0, 760.0])
             .with_min_inner_size([760.0, 520.0])
-            .with_title("ProtonLaunch"),
+            .with_title("Gamelo")
+            .with_app_id("gamelo")
+            .with_icon({
+                let img = icon_rgba();
+                let (width, height) = img.dimensions();
+                Arc::new(egui::IconData { rgba: img.into_raw(), width, height })
+            }),
         ..Default::default()
     };
     eframe::run_native(
-        "protonlaunch",
+        "gamelo",
         options,
         Box::new(move |cc| {
             configure_style(&cc.egui_ctx);
@@ -8592,7 +8669,7 @@ mod tests {
 
     #[test]
     fn desktop_exec_args_are_escaped() {
-        assert_eq!(desktop_exec_arg("/usr/bin/protonlaunch"), "/usr/bin/protonlaunch");
+        assert_eq!(desktop_exec_arg("/usr/bin/gamelo"), "/usr/bin/gamelo");
         assert_eq!(desktop_exec_arg("/a b/app"), "\"/a b/app\"");
         assert_eq!(desktop_exec_arg("/100%/app"), "/100%%/app");
         assert_eq!(desktop_exec_arg("/a $x/app"), "\"/a \\\\$x/app\"");
@@ -8760,8 +8837,8 @@ mod tests {
         // Work on a copy of the config so nothing here touches the real one.
         let fake_home = std::env::temp_dir().join(format!("plaunch-shots-{}", std::process::id()));
         let _ = fs::remove_dir_all(&fake_home);
-        fs::create_dir_all(fake_home.join(".config/protonlaunch")).unwrap();
-        let _ = fs::copy(config_path(), fake_home.join(".config/protonlaunch/config.json"));
+        fs::create_dir_all(fake_home.join(".config/gamelo")).unwrap();
+        let _ = fs::copy(config_path(), fake_home.join(".config/gamelo/config.json"));
         // SAFETY: this ignored test is run on its own, so no other thread reads the env.
         unsafe {
             std::env::set_var("HOME", &fake_home);
@@ -8986,7 +9063,7 @@ mod tests {
         for _ in 0..4 {
             frame(&mut app, &mut raster, vec![], None);
         }
-        let preset_125 = egui::pos2(679.0, 612.0);
+        let preset_125 = egui::pos2(679.0, 698.0);
         frame(&mut app, &mut raster, click(preset_125), None);
         frame(&mut app, &mut raster, release(preset_125), None);
         for _ in 0..3 {
@@ -9033,11 +9110,11 @@ mod tests {
             let real = config_path();
             let home = std::env::temp_dir().join(format!("plaunch-{tag}-{}", std::process::id()));
             let _ = fs::remove_dir_all(&home);
-            fs::create_dir_all(home.join(".config/protonlaunch")).unwrap();
-            let _ = fs::copy(&real, home.join(".config/protonlaunch/config.json"));
+            fs::create_dir_all(home.join(".config/gamelo")).unwrap();
+            let _ = fs::copy(&real, home.join(".config/gamelo/config.json"));
             // Stats, artwork cache and save data are read from the real data dir copy.
             let real_data = data_dir();
-            let data = home.join(".local/share/protonlaunch");
+            let data = home.join(".local/share/gamelo");
             fs::create_dir_all(&data).unwrap();
             let _ = fs::copy(real_data.join("stats.json"), data.join("stats.json"));
             fs::create_dir_all(data.join("cache")).unwrap();

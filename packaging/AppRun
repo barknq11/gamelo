@@ -4,4 +4,4 @@ HERE="$(dirname "$(readlink -f "$0")")"
 export PATH="$HERE/usr/bin:$PATH"
 
 # Prefer a system WebKit/GTK file chooser if present; harmless otherwise.
-exec "$HERE/usr/bin/protonlaunch" "$@"
+exec "$HERE/usr/bin/gamelo" "$@"

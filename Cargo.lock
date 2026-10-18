@@ -748,6 +748,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "gamelo"
+version = "0.1.0"
+dependencies = [
+ "ar-reshaper",
+ "arboard",
+ "eframe",
+ "image",
+ "libc",
+ "serde",
+ "serde_json",
+ "skrifa",
+ "unicode-bidi",
+]
+
+[[package]]
 name = "gethostname"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1788,21 +1803,6 @@ name = "profiling"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
-
-[[package]]
-name = "protonlaunch"
-version = "0.1.0"
-dependencies = [
- "ar-reshaper",
- "arboard",
- "eframe",
- "image",
- "libc",
- "serde",
- "serde_json",
- "skrifa",
- "unicode-bidi",
-]
 
 [[package]]
 name = "pxfm"

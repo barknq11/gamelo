@@ -154,6 +154,24 @@ pub const SLATE: ThemeDef = ThemeDef {
 };
 
 pub const THEMES: &[ThemeDef] = &[
+    // The brand theme: plum-black with Gamelo rose, from the app icon.
+    ThemeDef {
+        key: "gamelo",
+        name: "Gamelo Night",
+        dark: true,
+        bg: 0x120D19,
+        sidebar: 0x0F0A15,
+        panel: 0x181220,
+        card: 0x1D1527,
+        card2: 0x261C33,
+        hover: 0x31243F,
+        border: 0x342741,
+        field: 0x0C0911,
+        text: 0xF7EEF4,
+        subtext: 0xC3B2C4,
+        faint: 0x8C7B92,
+        accent: 0xFF6F98,
+    },
     SLATE,
     // Deep navy with a teal accent (theme-factory "Ocean Depths").
     ThemeDef {
@@ -244,6 +262,24 @@ pub const THEMES: &[ThemeDef] = &[
         subtext: 0xB0B0B0,
         faint: 0x7C7C7C,
         accent: 0x3D8BFF,
+    },
+    // The brand theme in daylight: blush paper with a deeper rose.
+    ThemeDef {
+        key: "gamelo",
+        name: "Gamelo Day",
+        dark: false,
+        bg: 0xFBF5F7,
+        sidebar: 0xF4EAF0,
+        panel: 0xFFFFFF,
+        card: 0xFFFFFF,
+        card2: 0xF5EAF0,
+        hover: 0xEEDDE7,
+        border: 0xE7D3DF,
+        field: 0xFFFFFF,
+        text: 0x2A1830,
+        subtext: 0x5F4866,
+        faint: 0x927D97,
+        accent: 0xD63F6E,
     },
     // Clean grey paper with the indigo accent ("Modern Minimalist").
     ThemeDef {
