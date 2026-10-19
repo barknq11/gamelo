@@ -2,6 +2,9 @@
 name = "gamelo"
 version = "0.1.0"
 edition = "2024"
+description = "A game launcher for Linux: your Windows games, stores, launchers and emulators in one place, no Steam needed"
+license = "MIT"
+repository = "https://github.com/barknq11/gamelo"
 
 [dependencies]
 arboard = "3.7.0"
