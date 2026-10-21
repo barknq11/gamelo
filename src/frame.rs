@@ -9,7 +9,7 @@ impl App {
         let game_count = self.cfg.custom_games.iter().filter(|g| g.rom.is_none()).count();
 
         let nav = if rtl() { egui::Panel::right("nav") } else { egui::Panel::left("nav") };
-        nav.exact_size(226.0)
+        nav.exact_size(232.0)
             .resizable(false)
             .show_separator_line(true)
             .frame(
@@ -17,90 +17,110 @@ impl App {
                     .fill(pal().sidebar)
                     .inner_margin(egui::Margin::symmetric(14, 16)),
             )
-            .show(ui, |ui| dir_ui(ui, |ui| {
+            .show(ui, |ui| {
+                let panel_h = ui.available_height();
+                egui::ScrollArea::vertical().id_salt("nav-scroll").auto_shrink([false, false]).scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| dir_ui(ui, |ui| {
+                let top = ui.min_rect().top();
+                ui.spacing_mut().item_spacing.y = 2.0;
                 // Brand
                 ui.horizontal(|ui| {
-                    let (rect, _) =
-                        ui.allocate_exact_size(egui::vec2(34.0, 34.0), egui::Sense::hover());
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::hover());
                     brand_mark(ui, rect);
-                    ui.add_space(8.0);
-                    vcol(ui, |ui| {
-                        ui.add_space(1.0);
-                        ui.label(
-                            egui::RichText::new("Gamelo")
-                                .size(17.0)
-                                .strong()
-                                .color(pal().text),
-                        );
-                        ui.label(
-                            egui::RichText::new(tr("Your games, in one place"))
-                                .size(11.5)
-                                .color(pal().faint),
-                        );
-                    });
+                    ui.add_space(6.0);
+                    ui.label(title_text("Gamelo", 20.0));
                 });
-                ui.add_space(20.0);
+                ui.add_space(14.0);
+                // Quick search (Ctrl+K)
+                let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 40.0), egui::Sense::click());
+                {
+                    let p = ui.painter();
+                    let hov = resp.hovered();
+                    p.rect_filled(rect, rad(10), pal().field);
+                    p.rect_stroke(rect, rad(10), egui::Stroke::new(1.0, if hov { pal().accent.gamma_multiply(0.7) } else { pal().border }), egui::StrokeKind::Inside);
+                    let x = |off: f32| if rtl() { rect.right() - off } else { rect.left() + off };
+                    glyph(p, Glyph::Search, egui::Rect::from_center_size(egui::pos2(x(20.0), rect.center().y), egui::vec2(16.0, 16.0)), pal().faint);
+                    let align = if rtl() { egui::Align2::RIGHT_CENTER } else { egui::Align2::LEFT_CENTER };
+                    p.text(egui::pos2(x(36.0), rect.center().y), align, tr("Quick search"), egui::FontId::proportional(14.0), pal().faint);
+                    let chip = p.layout_no_wrap("Ctrl K".into(), egui::FontId::proportional(11.5), pal().faint);
+                    let cw = chip.size().x + 12.0;
+                    let cx = if rtl() { rect.left() + 8.0 } else { rect.right() - 8.0 - cw };
+                    let cr = egui::Rect::from_min_size(egui::pos2(cx, rect.center().y - 10.0), egui::vec2(cw, 20.0));
+                    p.rect_stroke(cr, rad(6), egui::Stroke::new(1.0, pal().border), egui::StrokeKind::Inside);
+                    p.galley(cr.center() - chip.size() / 2.0, chip, pal().faint);
+                }
+                if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                    self.quick = Some(quick::Quick { fresh: true, ..Default::default() });
+                }
+                ui.add_space(14.0);
 
-                ui.label(egui::RichText::new(tr("LIBRARY")).size(11.5).strong().color(pal().faint));
-                ui.add_space(6.0);
                 // The selection highlight is drawn underneath and slides between items.
                 let highlight = ui.painter().add(egui::Shape::Noop);
                 let mut selected: Option<egui::Rect> = None;
-                let r = nav_item(ui, self.page == Page::Home, "Home", None);
-                if self.page == Page::Home {
-                    selected = Some(r.rect);
-                }
-                if r.clicked() {
+                let mut item = |ui: &mut egui::Ui, on: bool, icon: NavMark, label: &str, count: Option<usize>, big: bool| {
+                    let r = nav_item(ui, on, icon, label, count, big);
+                    if on {
+                        selected = Some(r.rect);
+                    }
+                    r.clicked()
+                };
+                if item(ui, self.page == Page::Home, NavMark::Icon(Glyph::Home), "Home", None, true) {
                     self.page = Page::Home;
                 }
                 let in_library = matches!(self.page, Page::Library | Page::Game | Page::Artwork | Page::Saves);
-                let r = nav_item(ui, in_library, "Library", Some(game_count));
-                if in_library {
-                    selected = Some(r.rect);
-                }
-                if r.clicked() {
+                if item(ui, in_library, NavMark::Icon(Glyph::Library), "Library", Some(game_count), true) {
+                    self.lib_filter = LibFilter::All;
                     self.page = Page::Library;
                 }
-                let r = nav_item(ui, self.page == Page::Stats, "Stats", None);
-                if self.page == Page::Stats {
-                    selected = Some(r.rect);
-                }
-                if r.clicked() {
+                if item(ui, self.page == Page::Stats, NavMark::Icon(Glyph::Stats), "Stats", None, true) {
                     self.page = Page::Stats;
                 }
-                let r = nav_item(ui, self.page == Page::Stores, "Stores", None);
-                if self.page == Page::Stores {
-                    selected = Some(r.rect);
-                }
-                if r.clicked() {
+
+                nav_label(ui, "Sources");
+                let on_store = |s: stores::Store| self.page == Page::Stores && self.stores.tab == s;
+                let (epic, gog) = (on_store(stores::Store::Epic), on_store(stores::Store::Gog));
+                if item(ui, epic, NavMark::Dot(egui::Color32::from_rgb(0xF7, 0xEE, 0xF4)), "Epic Games", None, false) {
+                    self.stores.tab = stores::Store::Epic;
                     self.page = Page::Stores;
                 }
-                let r = nav_item(ui, self.page == Page::Launchers, "Launchers", None);
-                if self.page == Page::Launchers {
-                    selected = Some(r.rect);
+                if item(ui, gog, NavMark::Dot(egui::Color32::from_rgb(0xB4, 0x8C, 0xFF)), "GOG", None, false) {
+                    self.stores.tab = stores::Store::Gog;
+                    self.page = Page::Stores;
                 }
-                if r.clicked() {
+                if item(ui, self.page == Page::Launchers, NavMark::Dot(egui::Color32::from_rgb(0x6F, 0xB8, 0xFF)), "Launchers", None, false) {
                     self.page = Page::Launchers;
                 }
-                let r = nav_item(ui, self.page == Page::Emulation, "Emulation", None);
-                if self.page == Page::Emulation {
-                    selected = Some(r.rect);
-                }
-                if r.clicked() {
+                if item(ui, self.page == Page::Emulation, NavMark::Dot(egui::Color32::from_rgb(0xE6, 0xB5, 0x66)), "Emulation", None, false) {
                     self.page = Page::Emulation;
                 }
-                if nav_item(ui, false, "Couch mode", None).on_hover_text(tr("Fullscreen, for the sofa and a controller (F11 or the Guide button)")).clicked() {
-                    self.couch_toggle(&ctx);
+                let mine = self.page == Page::Library && self.lib_filter == LibFilter::Mine;
+                if item(ui, mine, NavMark::Dot(egui::Color32::from_rgb(0x6F, 0xD0, 0x8C)), "Installed by me", None, false) {
+                    self.lib_filter = LibFilter::Mine;
+                    self.page = Page::Library;
                 }
 
-                ui.add_space(16.0);
-                ui.label(egui::RichText::new(tr("TOOLS")).size(11.5).strong().color(pal().faint));
-                ui.add_space(6.0);
-                let missing = self
-                    .deps
+                let collections: Vec<(String, usize)> = self
+                    .cfg
+                    .settings
+                    .collections
                     .iter()
-                    .filter(|r| !r.found && r.action.is_some())
-                    .count();
+                    .map(|c| (c.clone(), self.cfg.custom_games.iter().filter(|g| g.collections.contains(c)).count()))
+                    .collect();
+                if !collections.is_empty() {
+                    nav_label(ui, "Collections");
+                    for (name, n) in collections.iter().take(6) {
+                        let on = self.page == Page::Library && self.lib_filter == LibFilter::Collection(name.clone());
+                        if item(ui, on, NavMark::None, name, Some(*n), false) {
+                            self.lib_filter = LibFilter::Collection(name.clone());
+                            self.page = Page::Library;
+                        }
+                    }
+                    if ui.add(egui::Label::new(egui::RichText::new(format!("  + {}", tr("New collection"))).color(pal().faint).small()).sense(egui::Sense::click())).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                        acts.collection = Some(CollectionEdit { game: None, renaming: None, name: String::new() });
+                    }
+                }
+
+                // Tools, Couch mode and Settings at the bottom.
+                let missing = self.deps.iter().filter(|r| !r.found && r.action.is_some()).count();
                 // A newer GE-Proton than any installed one (for people who use GE).
                 let uses_ge = self.proton_tools.iter().any(|t| t.label.starts_with("GE-Proton"));
                 if uses_ge && !self.proton.releases.contains_key("ge") {
@@ -114,7 +134,19 @@ impl App {
                         .map(|r| r.tag.clone()),
                     _ => None,
                 };
-                let r = nav_item(ui, self.page == Page::Proton, "Proton", None);
+                let mut playing: Vec<String> = self.running.values().map(|m| m.name.clone()).collect();
+                playing.sort_unstable();
+                let umu_ok = self.deps.iter().any(|r| r.name == "umu-run" && r.found);
+                let footer_h = 36.0 + 3.0 * 38.0 + 6.0 + 2.0 * 44.0 + 4.0
+                    + if umu_ok { 0.0 } else { 28.0 }
+                    + 24.0 * playing.len() as f32
+                    + 46.0 * self.tasks.len() as f32;
+                let used = ui.min_rect().bottom() - top;
+                if panel_h > used + footer_h {
+                    ui.add_space(panel_h - used - footer_h);
+                }
+                nav_label(ui, "Tools");
+                let r = nav_item(ui, self.page == Page::Proton, NavMark::None, "Proton", None, false);
                 if let Some(tag) = &update {
                     let dot = if rtl() { egui::pos2(r.rect.left() + 16.0, r.rect.center().y) } else { egui::pos2(r.rect.right() - 16.0, r.rect.center().y) };
                     ui.painter().circle_filled(dot, 4.0, pal().accent);
@@ -126,33 +158,29 @@ impl App {
                 if r.clicked() {
                     self.page = Page::Proton;
                 }
-                if self.download.is_some() {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(egui::RichText::new(tr("Working…")).color(pal().subtext).small());
-                    });
-                } else {
-                    let deps_label = if missing > 0 {
-                        format!("{}  ({missing})", lg("Dependencies"))
-                    } else {
-                        lg("Dependencies").to_string()
-                    };
-                    let r = nav_item(ui, self.page == Page::Dependencies, &deps_label, None);
-                    if self.page == Page::Dependencies {
-                        selected = Some(r.rect);
-                    }
-                    if r.clicked() {
-                        self.page = Page::Dependencies;
-                    }
+                let deps_count = (missing > 0).then_some(missing);
+                let r = nav_item(ui, self.page == Page::Dependencies, NavMark::None, "Dependencies", deps_count, false);
+                if self.page == Page::Dependencies {
+                    selected = Some(r.rect);
                 }
-                let r = nav_item(ui, self.page == Page::Cleanup, "Disk space", None);
+                if r.clicked() {
+                    self.page = Page::Dependencies;
+                }
+                let r = nav_item(ui, self.page == Page::Cleanup, NavMark::None, "Disk space", None, false);
                 if self.page == Page::Cleanup {
                     selected = Some(r.rect);
                 }
                 if r.clicked() {
                     self.page = Page::Cleanup;
                 }
-                let r = nav_item(ui, self.page == Page::Settings, "Settings", None);
+                ui.add_space(6.0);
+                if nav_item(ui, false, NavMark::Icon(Glyph::Couch), "Couch mode", None, true)
+                    .on_hover_text(tr("Fullscreen, for the sofa and a controller (F11 or the Guide button)"))
+                    .clicked()
+                {
+                    self.couch_toggle(&ctx);
+                }
+                let r = nav_item(ui, self.page == Page::Settings, NavMark::Icon(Glyph::Settings), "Settings", None, true);
                 if self.page == Page::Settings {
                     selected = Some(r.rect);
                 }
@@ -165,34 +193,14 @@ impl App {
                     let y = tw.follow(r.top(), now, secs);
                     self.motion.busy |= !tw.settled(now, secs);
                     let hr = egui::Rect::from_min_size(egui::pos2(r.left(), y), r.size());
-                    let edge = if rtl() { hr.right() - 3.0 } else { hr.left() };
-                    let bar = egui::Rect::from_min_max(
-                        egui::pos2(edge, hr.top() + 7.0),
-                        egui::pos2(edge + 3.0, hr.bottom() - 7.0),
-                    );
-                    ui.painter().set(
-                        highlight,
-                        egui::Shape::Vec(vec![
-                            egui::Shape::rect_filled(hr, rad(9), pal().accent.gamma_multiply(0.16)),
-                            egui::Shape::rect_filled(bar, rad(2), pal().accent),
-                        ]),
-                    );
+                    ui.painter().set(highlight, egui::Shape::rect_filled(hr, rad(10), pal().card2));
                 }
 
-                // Pinned status footer
-                let mut playing: Vec<&str> = self.running.values().map(|m| m.name.as_str()).collect();
-                playing.sort_unstable();
-                let footer_h = 48.0 + 24.0 * playing.len() as f32 + 46.0 * self.tasks.len() as f32;
-                let avail = ui.available_height();
-                if avail > footer_h {
-                    ui.add_space(avail - footer_h);
+                // Status footer: only what needs attention.
+                if !umu_ok {
+                    status_line(ui, true, "umu-run", "missing");
                 }
-                ui.add_space(6.0);
-                ui.separator();
-                ui.add_space(8.0);
-                let umu_ok = self.deps.iter().any(|r| r.name == "umu-run" && r.found);
-                status_line(ui, !umu_ok, "umu-run", if umu_ok { "ready" } else { "missing" });
-                for name in playing {
+                for name in &playing {
                     status_line(ui, false, &tr("Playing"), &disp(name));
                 }
                 for t in &self.tasks {
@@ -202,6 +210,7 @@ impl App {
                     ui.add(if t.progress.is_some() { bar } else { bar.animate(true) });
                 }
             }));
+            });
 
         egui::Panel::bottom("status")
             .show_separator_line(true)

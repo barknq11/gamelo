@@ -386,9 +386,9 @@ impl GameStatus {
     pub(crate) fn color(self) -> egui::Color32 {
         match self {
             GameStatus::None => pal().faint,
-            GameStatus::Playing => pal().ok,
-            GameStatus::Backlog => egui::Color32::from_rgb(0x6c, 0x9e, 0xf8),
-            GameStatus::Finished => GOLD,
+            GameStatus::Playing => egui::Color32::from_rgb(0x6F, 0xD0, 0x8C),
+            GameStatus::Backlog => egui::Color32::from_rgb(0xE6, 0xB5, 0x66),
+            GameStatus::Finished => egui::Color32::from_rgb(0x6F, 0xB8, 0xFF),
             GameStatus::Dropped => pal().danger,
         }
     }

@@ -442,15 +442,16 @@ fn ui_screenshots() {
         frame(&mut app, &mut raster, vec![], None);
     }
     // Bring the Launch card's fields into view.
-    frame(&mut app, &mut raster, vec![egui::Event::PointerMoved(egui::pos2(700.0, 500.0)), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -200.0), phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel, modifiers: Default::default() }], None);
+    frame(&mut app, &mut raster, vec![egui::Event::PointerMoved(egui::pos2(700.0, 500.0)), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -600.0), phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel, modifiers: Default::default() }], None);
     for _ in 0..6 {
         frame(&mut app, &mut raster, vec![], None);
     }
-    let args_field = egui::pos2(800.0, 616.0);
+    frame(&mut app, &mut raster, vec![], Some("8b-launch-fields.png"));
+    let args_field = egui::pos2(800.0, 512.0);
     frame(&mut app, &mut raster, click(args_field), None);
     frame(&mut app, &mut raster, release(args_field), None);
     frame(&mut app, &mut raster, vec![egui::Event::Text("-dx11".into())], None);
-    let sidebar_library = egui::pos2(110.0, 184.0);
+    let sidebar_library = egui::pos2(110.0, 188.0);
     frame(&mut app, &mut raster, click(sidebar_library), None);
     frame(&mut app, &mut raster, release(sidebar_library), None);
     let g = &app.cfg.custom_games[app.selected_index().unwrap()];
@@ -518,7 +519,7 @@ fn ui_screenshots() {
     for (pos, name) in [
         (egui::pos2(335.0, 350.0), "13-menu-poster.png"),
         (egui::pos2(900.0, 640.0), "14-menu-library.png"),
-        (egui::pos2(400.0, 127.0), "15-menu-text.png"),
+        (egui::pos2(878.0, 52.0), "15-menu-text.png"),
     ] {
         for _ in 0..3 {
             frame(&mut app, &mut raster, vec![], None);
@@ -532,14 +533,14 @@ fn ui_screenshots() {
     }
     // The text menu works: "Clear" empties the search box.
     app.search = "ved".into();
-    let search = egui::pos2(400.0, 127.0);
+    let search = egui::pos2(878.0, 52.0);
     for _ in 0..3 {
         frame(&mut app, &mut raster, vec![], None);
     }
     frame(&mut app, &mut raster, right(search, true), None);
     frame(&mut app, &mut raster, right(search, false), None);
     frame(&mut app, &mut raster, vec![], Some("16-menu-text-filled.png"));
-    let clear_item = egui::pos2(428.0, 317.0);
+    let clear_item = egui::pos2(906.0, 268.0);
     frame(&mut app, &mut raster, click(clear_item), None);
     frame(&mut app, &mut raster, release(clear_item), None);
     assert!(app.search.is_empty(), "Clear didn't clear: {:?}", app.search);
@@ -559,7 +560,7 @@ fn ui_screenshots() {
     for _ in 0..4 {
         frame(&mut app, &mut raster, vec![], None);
     }
-    let preset_125 = egui::pos2(679.0, 698.0);
+    let preset_125 = egui::pos2(726.0, 752.0);
     frame(&mut app, &mut raster, click(preset_125), None);
     frame(&mut app, &mut raster, release(preset_125), None);
     for _ in 0..3 {
@@ -1098,7 +1099,13 @@ fn idle_pages() {
         for _ in 0..40 {
             h.frame_dt(0.5, vec![], None);
         }
-        if h.repaint < Duration::from_millis(500) {
+        // A one-off (a background job finishing) is fine; every frame is a loop.
+        let mut looping = true;
+        for _ in 0..3 {
+            h.frame_dt(0.5, vec![], None);
+            looping &= h.repaint < Duration::from_millis(500);
+        }
+        if looping {
             let causes: Vec<String> = h.ctx.repaint_causes().iter().map(|c| c.to_string()).collect();
             busy.push(format!("{page:?}: {:?} {causes:?} busy={} looping={}", h.repaint, h.app.motion.busy, h.app.motion.looping));
         }
@@ -1423,17 +1430,17 @@ fn arabic_popups() {
     h.click(egui::pos2(900.0, 450.0), Secondary);
     h.shot("p1-tile-menu.png");
     h.key(egui::Key::Escape);
-    h.click(egui::pos2(90.0, 127.0), Primary);
+    h.click(egui::pos2(212.0, 119.0), Primary);
     h.shot("p2-sort-dropdown.png");
     h.key(egui::Key::Escape);
     h.click(egui::pos2(500.0, 600.0), Secondary);
     h.shot("p3-library-menu.png");
     h.key(egui::Key::Escape);
     h.idle(2);
-    h.hover(egui::pos2(255.0, 127.0));
+    h.hover(egui::pos2(100.0, 119.0));
     h.shot("p4-tooltip.png");
     // Typing Arabic into the search box: reads right to left, edits as typed.
-    h.click(egui::pos2(840.0, 127.0), Primary);
+    h.click(egui::pos2(347.0, 52.0), Primary);
     h.frame_dt(0.1, vec![egui::Event::Text("لعبة الحرب".into())], None);
     // Straight away, while the caret is lit (it blinks).
     h.frame_dt(0.02, vec![], Some("p4b-search-arabic.png"));
@@ -1442,7 +1449,7 @@ fn arabic_popups() {
     h.key(egui::Key::Backspace);
     assert_eq!(h.app.search, "لعبة الحر");
     // A click on the far left puts the caret at the end; typing continues there.
-    h.click(egui::pos2(712.0, 127.0), Primary);
+    h.click(egui::pos2(228.0, 52.0), Primary);
     h.frame_dt(0.1, vec![egui::Event::Text("ب 2".into())], None);
     assert_eq!(h.app.search, "لعبة الحرب 2");
     // The status bar draws the same text through the label path, for comparison.
@@ -1464,7 +1471,7 @@ fn arabic_popups() {
     h.shot("p8-deps.png");
     h.app.selected = h.app.cfg.custom_games.first().map(|g| g.id.clone());
     h.page(Page::Game);
-    h.click(egui::pos2(500.0, 360.0), Primary);
+    h.click(egui::pos2(92.0, 352.0), Primary);
     h.shot("p9-more-menu.png");
     h.key(egui::Key::Escape);
     h.idle(2);

@@ -20,6 +20,7 @@ mod extras;
 mod frame;
 mod game_page;
 mod gamepad;
+mod glyphs;
 mod games;
 mod hltb;
 mod home;
@@ -60,6 +61,7 @@ use net::*;
 use runner::*;
 use sgdb::*;
 use style::*;
+use glyphs::*;
 use widgets::*;
 
 fn home() -> PathBuf {
@@ -354,6 +356,8 @@ enum LibFilter {
     All,
     Favorites,
     Unplayed,
+    /// Games added by hand: not from a store, a launcher or a ROM folder.
+    Mine,
     Status(GameStatus),
     Collection(String),
 }

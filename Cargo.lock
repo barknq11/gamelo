@@ -996,7 +996,6 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
- "skrifa",
  "unicode-bidi",
  "zbus",
 ]

@@ -169,8 +169,8 @@ pub(crate) fn disclosure_icon(ui: &mut egui::Ui, openness: f32, response: &egui:
 /// coloured border.
 pub(crate) fn card_frame() -> egui::Frame {
     egui::Frame::new()
-        .inner_margin(egui::Margin::symmetric(16, 14))
-        .corner_radius(rad(12))
+        .inner_margin(egui::Margin::symmetric(20, 18))
+        .corner_radius(rad(16))
         .fill(pal().card)
         .stroke(egui::Stroke::new(1.0, pal().border))
 }
@@ -390,12 +390,13 @@ pub(crate) fn choice_chip(ui: &mut egui::Ui, on: bool, label: &str) -> egui::Res
         pal().subtext.lerp_to_gamma(pal().on_accent, t),
         pal().border.lerp_to_gamma(pal().accent, t),
     );
+    let fill = if t > 0.0 { fill } else { pal().card };
     let resp = ui.add(
-        egui::Button::new(egui::RichText::new(tr(label)).color(fg).small().strong())
+        egui::Button::new(egui::RichText::new(tr(label)).color(fg).family(semibold_family()).size(14.0))
             .fill(fill)
             .stroke(egui::Stroke::new(1.0, stroke))
             .corner_radius(rad(255))
-            .min_size(egui::vec2(0.0, 26.0)),
+            .min_size(egui::vec2(0.0, 36.0)),
     );
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
@@ -412,10 +413,10 @@ pub(crate) fn card_inner() -> egui::Frame {
 /// A filled red button for destructive confirmations.
 pub(crate) fn danger_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
     ui.add(
-        egui::Button::new(egui::RichText::new(tr(label)).color(pal().on_accent).strong())
+        egui::Button::new(egui::RichText::new(tr(label)).color(pal().on_accent).family(semibold_family()))
             .fill(pal().danger)
             .stroke(egui::Stroke::new(1.0, pal().danger))
-            .corner_radius(rad(9)),
+            .corner_radius(rad(10)),
     )
 }
 
@@ -492,46 +493,71 @@ pub(crate) fn accent_swatch(ui: &mut egui::Ui, color: egui::Color32, selected: b
 /// Accent-filled primary action button.
 pub(crate) fn primary_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
     ui.add(
-        egui::Button::new(egui::RichText::new(tr(label)).color(pal().on_accent).strong())
+        egui::Button::new(egui::RichText::new(tr(label)).color(pal().on_accent).family(semibold_family()))
             .fill(pal().accent)
             .stroke(egui::Stroke::new(1.0, pal().accent))
-            .corner_radius(rad(9)),
+            .corner_radius(rad(10)),
     )
 }
 
-/// A full-width sidebar navigation entry. Returns the click response.
-pub(crate) fn nav_item(
-    ui: &mut egui::Ui,
-    selected: bool,
-    label: &str,
-    count: Option<usize>,
-) -> egui::Response {
-    let height = 36.0;
+/// What sits before a sidebar entry's label.
+#[derive(Clone, Copy)]
+pub(crate) enum NavMark {
+    None,
+    Icon(Glyph),
+    Dot(egui::Color32),
+}
+
+/// A full-width sidebar entry: main pages are taller with an icon, sources
+/// and tools smaller. Returns the click response.
+pub(crate) fn nav_item(ui: &mut egui::Ui, selected: bool, mark: NavMark, label: &str, count: Option<usize>, big: bool) -> egui::Response {
+    let height = if big { 42.0 } else { 36.0 };
     let width = ui.available_width();
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
     let hovered = resp.hovered();
     let p = ui.painter();
     // The selected highlight is drawn (and slid) by the sidebar itself.
     if hovered && !selected {
-        p.rect_filled(rect, rad(9), pal().card);
+        p.rect_filled(rect, rad(10), pal().card);
     }
-    let fg = if selected || hovered { pal().text } else { pal().subtext };
-    let (start, start_align, end, end_align) = if rtl() {
-        (rect.right() - 16.0, egui::Align2::RIGHT_CENTER, rect.left() + 12.0, egui::Align2::LEFT_CENTER)
+    let fg = if selected { pal().accent } else if hovered { pal().text } else { pal().subtext };
+    let x = |off: f32| if rtl() { rect.right() - off } else { rect.left() + off };
+    let mut text_off = 12.0;
+    match mark {
+        NavMark::Icon(g) => {
+            glyph(p, g, egui::Rect::from_center_size(egui::pos2(x(21.0), rect.center().y), egui::vec2(18.0, 18.0)), fg);
+            text_off = 42.0;
+        }
+        NavMark::Dot(c) => {
+            p.circle_filled(egui::pos2(x(16.0), rect.center().y), 4.0, c);
+            text_off = 32.0;
+        }
+        NavMark::None => {}
+    }
+    let (start_align, end, end_align) = if rtl() {
+        (egui::Align2::RIGHT_CENTER, rect.left() + 12.0, egui::Align2::LEFT_CENTER)
     } else {
-        (rect.left() + 16.0, egui::Align2::LEFT_CENTER, rect.right() - 12.0, egui::Align2::RIGHT_CENTER)
+        (egui::Align2::LEFT_CENTER, rect.right() - 12.0, egui::Align2::RIGHT_CENTER)
     };
-    p.text(egui::pos2(start, rect.center().y), start_align, tr(label), egui::FontId::proportional(15.0), fg);
+    let family = if selected { semibold_family() } else { egui::FontFamily::Proportional };
+    let font = egui::FontId::new(if big { 15.0 } else { 14.0 }, family);
+    p.text(egui::pos2(x(text_off), rect.center().y), start_align, tr(label), font, fg);
     if let Some(c) = count {
-        p.text(
-            egui::pos2(end, rect.center().y),
-            end_align,
-            c.to_string(),
-            egui::FontId::proportional(12.0),
-            if selected { pal().accent } else { pal().faint },
-        );
+        p.text(egui::pos2(end, rect.center().y), end_align, c.to_string(), egui::FontId::proportional(12.0), pal().faint);
     }
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// A small upper-case label over a group of sidebar entries.
+pub(crate) fn nav_label(ui: &mut egui::Ui, text: &str) {
+    ui.add_space(12.0);
+    ui.horizontal(|ui| {
+        ui.add_space(12.0);
+        let label = tr(text);
+        let label = if rtl() { label } else { label.to_uppercase() };
+        ui.label(egui::RichText::new(label).family(semibold_family()).size(11.5).color(pal().faint));
+    });
+    ui.add_space(2.0);
 }
 
 /// A compact status line for the sidebar footer: dot + label + value.
@@ -582,7 +608,7 @@ pub(crate) fn back_button(ui: &mut egui::Ui, ctx: &egui::Context, label: &str) -
 
 /// A page title with a muted subtitle underneath.
 pub(crate) fn page_header(ui: &mut egui::Ui, title: &str, subtitle: &str) {
-    ui.label(egui::RichText::new(tr(title)).size(24.0).strong().color(pal().text));
+    ui.label(title_text(tr(title), 30.0));
     para(ui, subtitle, pal().subtext, true);
     ui.add_space(14.0);
 }
@@ -591,7 +617,7 @@ pub(crate) fn page_header(ui: &mut egui::Ui, title: &str, subtitle: &str) {
 pub(crate) fn section(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
     card_frame().show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.label(egui::RichText::new(tr(title)).strong().color(pal().text));
+        ui.label(egui::RichText::new(tr(title)).family(semibold_family()).size(16.0).color(pal().text));
         ui.add_space(10.0);
         add(ui);
     });
@@ -601,7 +627,7 @@ pub(crate) fn section(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui
 pub(crate) fn section_sub(ui: &mut egui::Ui, title: &str, sub: &str, add: impl FnOnce(&mut egui::Ui)) {
     card_frame().show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.label(egui::RichText::new(tr(title)).size(16.0).strong().color(pal().text));
+        ui.label(egui::RichText::new(tr(title)).family(semibold_family()).size(16.0).color(pal().text));
         para(ui, sub, pal().subtext, true);
         ui.add_space(12.0);
         add(ui);
@@ -1021,14 +1047,6 @@ pub(crate) fn star(painter: &egui::Painter, c: egui::Pos2, r: f32, filled: bool,
     }
 }
 
-/// A square button with a star: filled gold when on.
-pub(crate) fn star_button(ui: &mut egui::Ui, on: bool) -> egui::Response {
-    let h = ui.spacing().interact_size.y.max(30.0) + 4.0;
-    let resp = ui.add(egui::Button::new("").min_size(egui::vec2(h, h)));
-    let color = if on { GOLD } else if resp.hovered() { pal().text } else { pal().subtext };
-    star(ui.painter(), resp.rect.center(), 8.0, on, color);
-    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
-}
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum PlayState {
@@ -1165,4 +1183,135 @@ pub(crate) fn art_current(
 pub(crate) fn game_missing_files(g: &CustomGame) -> bool {
     !Path::new(&g.exe).is_file()
         || (g.kind == GameKind::Windows && !Path::new(&g.proton_dir).join("proton").is_file())
+}
+
+/// The design's card for headline content: rounder and roomier than `card_frame`.
+pub(crate) fn big_card() -> egui::Frame {
+    egui::Frame::new()
+        .inner_margin(egui::Margin::same(22))
+        .corner_radius(rad(18))
+        .fill(pal().card)
+        .stroke(egui::Stroke::new(1.0, pal().border))
+}
+
+/// A tall secondary button: card fill, border, semibold label.
+pub(crate) fn big_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    ui.add(
+        egui::Button::new(egui::RichText::new(tr(label)).family(semibold_family()).size(14.0).color(pal().text))
+            .fill(pal().card)
+            .stroke(egui::Stroke::new(1.0, pal().border))
+            .corner_radius(rad(10))
+            .min_size(egui::vec2(0.0, 44.0)),
+    )
+    .on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// A button for use over artwork: the page colour, no border.
+pub(crate) fn dark_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    ui.add(
+        egui::Button::new(egui::RichText::new(tr(label)).family(semibold_family()).size(15.0).color(pal().text))
+            .fill(pal().bg)
+            .stroke(egui::Stroke::NONE)
+            .corner_radius(rad(12))
+            .min_size(egui::vec2(0.0, 44.0)),
+    )
+    .on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// A small solid label ("Epic", "Playing", "JUMP BACK IN").
+pub(crate) fn tag(ui: &mut egui::Ui, text: &str, bg: egui::Color32, fg: egui::Color32) {
+    let galley = ui.painter().layout_no_wrap(disp(text), egui::FontId::new(12.0, semibold_family()), fg);
+    let (rect, _) = ui.allocate_exact_size(galley.size() + egui::vec2(18.0, 10.0), egui::Sense::hover());
+    ui.painter().rect_filled(rect, rad(6), bg);
+    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, fg);
+}
+
+/// Where a game comes from, for captions ("Epic Games", "Battle.net", "SNES", "Installed").
+pub(crate) fn game_source(g: &CustomGame) -> String {
+    if let Some(s) = &g.store {
+        return s.store.name().to_string();
+    }
+    if let Some(l) = &g.launcher {
+        return launchers::def(&l.key).map_or_else(|| l.key.clone(), |d| d.name.to_string());
+    }
+    if let Some(r) = &g.rom {
+        return emulation::platform(&r.platform).map_or_else(|| r.platform.clone(), |p| p.name.to_string());
+    }
+    lg("Installed").to_string()
+}
+
+/// A filter chip with its count after the label ("Backlog 41").
+pub(crate) fn count_chip(ui: &mut egui::Ui, on: bool, label: &str, count: usize) -> egui::Response {
+    let id = ui.make_persistent_id(("count-chip", label));
+    let t = ui.ctx().animate_bool_with_time(id, on, ui.style().animation_time * 1.5);
+    let fg = pal().subtext.lerp_to_gamma(pal().on_accent, t);
+    let fill = if t > 0.0 { pal().card.lerp_to_gamma(pal().accent, t) } else { pal().card };
+    let stroke = pal().border.lerp_to_gamma(pal().accent, t);
+    let mut job = egui::text::LayoutJob::default();
+    let fmt = |family: egui::FontFamily, color: egui::Color32| egui::TextFormat { font_id: egui::FontId::new(14.0, family), color, ..Default::default() };
+    job.append(&disp(&tr(label)), 0.0, fmt(semibold_family(), fg));
+    job.append(&count.to_string(), 6.0, fmt(egui::FontFamily::Proportional, fg.gamma_multiply(0.75)));
+    ui.add(egui::Button::new(job).fill(fill).stroke(egui::Stroke::new(1.0, stroke)).corner_radius(rad(255)).min_size(egui::vec2(0.0, 38.0)))
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// The grid / list switch. Returns Some(true) for list, Some(false) for grid when clicked.
+pub(crate) fn view_toggle(ui: &mut egui::Ui, list: bool) -> Option<bool> {
+    let mut picked = None;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(88.0, 38.0), egui::Sense::hover());
+    let p = ui.painter().clone();
+    p.rect_stroke(rect, rad(10), egui::Stroke::new(1.0, pal().border), egui::StrokeKind::Inside);
+    // Grid first in reading order.
+    for (k, (is_list, g, tip)) in [(false, Glyph::Grid, "Grid"), (true, Glyph::List, "List")].into_iter().enumerate() {
+        let col = if rtl() { 1 - k } else { k } as f32;
+        let r = egui::Rect::from_min_size(rect.min + egui::vec2(col * 44.0, 0.0), egui::vec2(44.0, 38.0)).shrink(1.0);
+        let resp = ui.interact(r, ui.scope_id().with(("view-toggle", k)), egui::Sense::click()).on_hover_text(tr(tip)).on_hover_cursor(egui::CursorIcon::PointingHand);
+        let on = is_list == list;
+        p.rect_filled(r, rad(9), if on { pal().card2 } else { pal().card });
+        glyph(&p, g, egui::Rect::from_center_size(r.center(), egui::vec2(16.0, 16.0)), if on { pal().text } else if resp.hovered() { pal().subtext } else { pal().faint });
+        if resp.clicked() && !on {
+            picked = Some(is_list);
+        }
+    }
+    picked
+}
+
+/// The design's quieter panel for charts and lists.
+pub(crate) fn panel_card() -> egui::Frame {
+    egui::Frame::new()
+        .inner_margin(egui::Margin::same(22))
+        .corner_radius(rad(18))
+        .fill(pal().panel)
+        .stroke(egui::Stroke::new(1.0, pal().border))
+}
+
+/// A segmented switch ("Week · Month · Year"). Returns the option clicked.
+pub(crate) fn segmented<T: Copy + PartialEq>(ui: &mut egui::Ui, options: &[(T, &str)], current: T) -> Option<T> {
+    let font = egui::FontId::new(14.0, semibold_family());
+    let widths: Vec<f32> = options.iter().map(|(_, l)| ui.painter().layout_no_wrap(tr(l), font.clone(), pal().text).size().x + 36.0).collect();
+    let total = widths.iter().sum::<f32>() + 4.0 * (options.len() as f32 + 1.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(total, 46.0), egui::Sense::hover());
+    let p = ui.painter().clone();
+    p.rect_filled(rect, rad(12), pal().card);
+    p.rect_stroke(rect, rad(12), egui::Stroke::new(1.0, pal().border), egui::StrokeKind::Inside);
+    let mut picked = None;
+    let mut x = 4.0;
+    for (k, ((value, label), w)) in options.iter().zip(&widths).enumerate() {
+        // Reading order: first option on the reading side.
+        let left = if rtl() { rect.right() - x - w } else { rect.left() + x };
+        let r = egui::Rect::from_min_size(egui::pos2(left, rect.top() + 4.0), egui::vec2(*w, 38.0));
+        x += w + 4.0;
+        let resp = ui.interact(r, ui.scope_id().with(("segmented", k)), egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+        let on = *value == current;
+        if on {
+            p.rect_filled(r, rad(9), pal().accent);
+        } else if resp.hovered() {
+            p.rect_filled(r, rad(9), pal().card2);
+        }
+        p.text(r.center(), egui::Align2::CENTER_CENTER, tr(label), font.clone(), if on { pal().on_accent } else { pal().subtext });
+        if resp.clicked() && !on {
+            picked = Some(*value);
+        }
+    }
+    picked
 }

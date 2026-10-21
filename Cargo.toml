@@ -19,8 +19,6 @@ libc = "0.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "ico"] }
-# Already in the tree via egui; used to validate system font files before loading them.
-skrifa = "0.44"
 ar-reshaper = "1.5.0"
 unicode-bidi = "0.3.18"
 ksni = { version = "0.3.6", default-features = false, features = ["blocking", "async-io"] }

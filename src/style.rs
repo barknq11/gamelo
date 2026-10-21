@@ -2,63 +2,45 @@
 
 use crate::*;
 
-/// Find a regular-weight system UI font. egui's bundled Ubuntu Light is thin
-/// and hard to read at small sizes.
-pub(crate) fn find_ui_font() -> Option<(String, egui::FontData)> {
-    use skrifa::MetadataProvider;
-    for family in ["Inter", "Noto Sans", "Cantarell", "Roboto", "Open Sans", "DejaVu Sans"] {
-        let out = Command::new("fc-match")
-            .args(["-f", "%{family[0]}\n%{file}\n%{index}", &format!("{family}:style=Regular")])
-            .output()
-            .ok()?;
-        let text = String::from_utf8_lossy(&out.stdout);
-        let mut lines = text.lines();
-        let (Some(found), Some(file)) = (lines.next(), lines.next()) else {
-            continue;
-        };
-        // fc-match always answers with *something*; only take the family we asked for.
-        if !found.eq_ignore_ascii_case(family) {
-            continue;
-        }
-        let index: u32 = lines.next().and_then(|i| i.parse().ok()).unwrap_or(0);
-        let Ok(bytes) = fs::read(file) else { continue };
-        // Validate before handing it to egui: a bad font would abort at startup.
-        let usable = skrifa::FontRef::from_index(&bytes, index)
-            .is_ok_and(|f| "Aa0".chars().all(|c| f.charmap().map(c).is_some()));
-        if !usable {
-            continue;
-        }
-        let mut data = egui::FontData::from_owned(bytes);
-        data.index = index;
-        return Some((family.to_string(), data));
-    }
-    None
-}
-
 /// Arabic glyphs (including the joined presentation forms the shaper emits),
 /// bundled so Arabic works whatever fonts the system has. SIL OFL, see assets/.
 pub(crate) const ARABIC_FONT: &[u8] = include_bytes!("../assets/NotoSansArabicUI-subset.ttf");
 
-/// Put the system UI font first and egui's bundled fonts after it as glyph
-/// fallbacks. The Arabic font goes before all of them: it has nothing but
-/// Arabic glyphs, and owning every Arabic character keeps egui's shaping runs
-/// predictable (see `shaping`) whatever the system font covers.
+/// The design's type: DM Sans for text, Sora for titles (SIL OFL, see assets/).
+const DM_SANS: &[u8] = include_bytes!("../assets/DMSans-Regular.ttf");
+const DM_SANS_SEMIBOLD: &[u8] = include_bytes!("../assets/DMSans-SemiBold.ttf");
+const SORA_BOLD: &[u8] = include_bytes!("../assets/Sora-Bold.ttf");
+
+/// Titles: Sora Bold.
+pub(crate) fn heading_family() -> egui::FontFamily {
+    egui::FontFamily::Name("heading".into())
+}
+
+/// Emphasised text (labels, buttons, active items): DM Sans SemiBold.
+pub(crate) fn semibold_family() -> egui::FontFamily {
+    egui::FontFamily::Name("semibold".into())
+}
+
+/// A title in the heading face.
+pub(crate) fn title_text(text: impl Into<String>, size: f32) -> egui::RichText {
+    egui::RichText::new(text.into()).family(heading_family()).size(size).color(pal().text)
+}
+
+/// DM Sans for text, Sora and DM Sans SemiBold as named families, egui's
+/// bundled fonts after them as glyph fallbacks. The Arabic font goes before
+/// all of them in every family: it has nothing but Arabic glyphs, and owning
+/// every Arabic character keeps egui's shaping runs predictable (see `shaping`).
 pub(crate) fn load_ui_font(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
-    if let Some((name, data)) = find_ui_font() {
-        fonts.font_data.insert(name.clone(), Arc::new(data));
-        fonts
-            .families
-            .entry(egui::FontFamily::Proportional)
-            .or_default()
-            .insert(0, name);
+    for (name, bytes) in [("arabic", ARABIC_FONT), ("dm-sans", DM_SANS), ("dm-sans-semibold", DM_SANS_SEMIBOLD), ("sora", SORA_BOLD)] {
+        fonts.font_data.insert(name.into(), Arc::new(egui::FontData::from_static(bytes)));
     }
-    fonts
-        .font_data
-        .insert("arabic".into(), Arc::new(egui::FontData::from_static(ARABIC_FONT)));
-    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-        fonts.families.entry(family).or_default().insert(0, "arabic".into());
-    }
+    let fallback = fonts.families.get(&egui::FontFamily::Proportional).cloned().unwrap_or_default();
+    let with = |first: &[&str]| -> Vec<String> { first.iter().map(|s| s.to_string()).chain(fallback.iter().cloned()).collect() };
+    fonts.families.insert(egui::FontFamily::Proportional, with(&["arabic", "dm-sans"]));
+    fonts.families.insert(heading_family(), with(&["arabic", "sora", "dm-sans-semibold"]));
+    fonts.families.insert(semibold_family(), with(&["arabic", "dm-sans-semibold"]));
+    fonts.families.entry(egui::FontFamily::Monospace).or_default().insert(0, "arabic".into());
     ctx.set_fonts(fonts);
 }
 
@@ -70,15 +52,15 @@ pub(crate) fn configure_style(ctx: &egui::Context) {
         style.text_styles = [
             (TextStyle::Small, FontId::new(12.0, Proportional)),
             (TextStyle::Body, FontId::new(14.5, Proportional)),
-            (TextStyle::Button, FontId::new(14.5, Proportional)),
+            (TextStyle::Button, FontId::new(14.5, semibold_family())),
             (TextStyle::Monospace, FontId::new(13.0, Monospace)),
-            (TextStyle::Heading, FontId::new(20.0, Proportional)),
+            (TextStyle::Heading, FontId::new(20.0, heading_family())),
         ]
         .into();
 
         style.spacing.item_spacing = egui::vec2(8.0, 8.0);
-        style.spacing.button_padding = egui::vec2(14.0, 8.0);
-        style.spacing.interact_size.y = 30.0;
+        style.spacing.button_padding = egui::vec2(16.0, 10.0);
+        style.spacing.interact_size.y = 36.0;
         style.spacing.window_margin = egui::Margin::same(16);
         style.spacing.menu_margin = egui::Margin::same(8);
 

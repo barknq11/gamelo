@@ -126,7 +126,7 @@ impl App {
     /// The tab strip under the game banner, with an underline that slides
     /// between tabs. Returns the tab to show.
     pub fn game_tab_bar(&mut self, ui: &mut egui::Ui, windows: bool) -> GameTab {
-        let mut tabs = vec![(GameTab::Overview, "Overview"), (GameTab::Settings, "Settings")];
+        let mut tabs = vec![(GameTab::Overview, "Overview"), (GameTab::Settings, "Launch options")];
         if windows {
             tabs.push((GameTab::Mods, "Mods & fixes"));
         } else if self.game_tab == GameTab::Mods {
@@ -147,10 +147,12 @@ impl App {
         let mut current: Option<egui::Rect> = None;
         let line_y = ui
             .horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 22.0;
+                ui.spacing_mut().item_spacing.x = 32.0;
+                ui.add_space(16.0);
                 for (tab, label) in &tabs {
                     let on = self.game_tab == *tab;
-                    let text = egui::RichText::new(tr(label)).size(15.5).color(if on { pal().text } else { pal().subtext });
+                    let family = if on { semibold_family() } else { egui::FontFamily::Proportional };
+                    let text = egui::RichText::new(tr(label)).family(family).size(15.0).color(if on { pal().text } else { pal().subtext });
                     let r = ui.add(egui::Label::new(text).sense(egui::Sense::click())).on_hover_cursor(egui::CursorIcon::PointingHand);
                     if r.clicked() {
                         self.game_tab = *tab;
@@ -163,7 +165,7 @@ impl App {
             .response
             .rect
             .bottom()
-            + 6.0;
+            + 12.0;
         let full = ui.max_rect();
         ui.painter().line_segment(
             [egui::pos2(full.left(), line_y), egui::pos2(full.right(), line_y)],
@@ -171,13 +173,14 @@ impl App {
         );
         if let Some(r) = current {
             let (now, secs) = (self.now, self.secs(0.22));
+            let r = r.expand2(egui::vec2(16.0, 0.0));
             let tw = self.motion.tab_x.get_or_insert((Tween::at(r.left(), now), Tween::at(r.width(), now)));
             let x = tw.0.follow(r.left(), now, secs);
             let w = tw.1.follow(r.width(), now, secs);
             self.motion.busy |= !(tw.0.settled(now, secs) && tw.1.settled(now, secs));
             ui.painter().rect_filled(
-                egui::Rect::from_min_size(egui::pos2(x, line_y - 1.5), egui::vec2(w, 3.0)),
-                rad(2),
+                egui::Rect::from_min_size(egui::pos2(x, line_y - 1.0), egui::vec2(w, 2.0)),
+                rad(1),
                 pal().accent,
             );
         }
@@ -987,96 +990,6 @@ pub fn game_root(exe: &str) -> Option<PathBuf> {
 }
 
 impl App {
-    /// "Jump back in": the most recently played game as a wide banner with
-    /// its Play button, above the library grid.
-    pub fn jump_back_in(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, acts: &mut Acts) {
-        let recent = self
-            .cfg
-            .custom_games
-            .iter()
-            .enumerate()
-            .filter_map(|(i, g)| self.stats.get(&g.id).filter(|s| s.last_played > 0).map(|s| (i, s.clone())))
-            .max_by_key(|(_, s)| s.last_played);
-        let Some((i, stat)) = recent else {
-            return;
-        };
-        let g = self.cfg.custom_games[i].clone();
-        let id = g.id.clone();
-        let w = ui.available_width();
-        let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 136.0), egui::Sense::click());
-        let hover = ctx.animate_bool_with_time(egui::Id::unique(("jump-hover", &id)), resp.hovered(), self.secs(0.16));
-        let painter = ui.painter().clone();
-        match self.game_hero(ctx, i) {
-            Some(t) => {
-                painter.add(cover_fill_shape_ex(&t, rect, 14, 1.0, 1.0 + 0.04 * hover, 0.35));
-            }
-            None => {
-                painter.rect_filled(rect, rad(14), pal().card);
-            }
-        }
-        // Darken from the reading side so the text holds up over any artwork.
-        let (dark, light) = (egui::Color32::from_black_alpha(215), egui::Color32::from_black_alpha(70));
-        let (l, r) = if rtl() { (light, dark) } else { (dark, light) };
-        let mut mesh = egui::Mesh::default();
-        for (pos, c) in [(rect.left_top(), l), (rect.right_top(), r), (rect.right_bottom(), r), (rect.left_bottom(), l)] {
-            mesh.colored_vertex(pos, c);
-        }
-        mesh.add_triangle(0, 1, 2);
-        mesh.add_triangle(0, 2, 3);
-        // The mesh has square corners: clip it to the card, then redraw the
-        // corners' edge with the border so nothing pokes out.
-        painter.with_clip_rect(rect.shrink(if pal().square { 0.0 } else { 2.0 })).add(mesh);
-        let stroke = egui::Stroke::new(1.0 + hover, pal().border.lerp_to_gamma(pal().accent, hover));
-        painter.rect_stroke(rect, rad(14), stroke, egui::StrokeKind::Inside);
-
-        let pad = 16.0;
-        let ph = rect.height() - 2.0 * pad;
-        let pw = ph * 2.0 / 3.0;
-        let px = if rtl() { rect.right() - pad - pw } else { rect.left() + pad };
-        let poster = egui::Rect::from_min_size(egui::pos2(px, rect.top() + pad), egui::vec2(pw, ph));
-        if let Some(t) = self.game_poster(ctx, i).or_else(|| self.game_generated_poster(ctx, i)) {
-            painter.add(cover_fill_shape(&t, poster, 8, 1.0));
-        }
-        painter.rect_stroke(poster, rad(8), egui::Stroke::new(1.0, egui::Color32::from_white_alpha(40)), egui::StrokeKind::Inside);
-
-        let (state, phase) = self.play_state(&id);
-        let dx = self.shake_dx(&id);
-        let button_w = 170.0;
-        let text = if rtl() {
-            egui::Rect::from_min_max(egui::pos2(rect.left() + button_w, rect.top() + pad), egui::pos2(poster.left() - 18.0, rect.bottom() - pad))
-        } else {
-            egui::Rect::from_min_max(egui::pos2(poster.right() + 18.0, rect.top() + pad), egui::pos2(rect.right() - button_w, rect.bottom() - pad))
-        };
-        let align = if rtl() { egui::Align::Max } else { egui::Align::Min };
-        let over = theme::OverImage::new();
-        // Child uis that don't allocate in the page: the banner already did.
-        {
-            let ui = &mut ui.new_child(egui::UiBuilder::new().max_rect(text).layout(egui::Layout::top_down(align)));
-            ui.add_space(8.0);
-            ui.label(egui::RichText::new(tr("Jump back in")).small().strong().color(pal().accent));
-            ui.add_space(2.0);
-            ui.add(egui::Label::new(egui::RichText::new(disp(&g.name)).size(22.0).strong().color(pal().text)).truncate());
-            ui.add_space(2.0);
-            let sub = trf("{} played · last played {}", &[&format_duration(stat.playtime_secs), &format_ago(stat.last_played, unix_now())]);
-            ui.label(egui::RichText::new(sub).color(pal().subtext));
-        }
-        let bx = if rtl() { rect.left() + pad } else { rect.right() - pad - 158.0 };
-        let slot = egui::Rect::from_min_size(egui::pos2(bx, rect.center().y - 22.0), egui::vec2(158.0, 44.0));
-        let layout = if rtl() { egui::Layout::left_to_right(egui::Align::Center) } else { egui::Layout::right_to_left(egui::Align::Center) };
-        let clicked = play_button(&mut ui.new_child(egui::UiBuilder::new().max_rect(slot).layout(layout)), state, phase, dx).clicked();
-        drop(over);
-        if clicked {
-            let act = if self.running.contains_key(&id) { GameAct::Stop } else { GameAct::Play };
-            acts.game.push((id.clone(), act));
-        } else if resp.clicked() {
-            acts.game.push((id.clone(), GameAct::Open));
-        }
-        let running = self.running.contains_key(&id);
-        resp.on_hover_cursor(egui::CursorIcon::PointingHand)
-            .context_menu(|ui| menu_ui(ui, |ui| game_menu(ui, &g, running, false, &self.cfg.settings.collections, acts)));
-        ui.add_space(22.0);
-    }
-
     /// "At a glance": how much you've played and how much room the game takes.
     pub fn glance_card(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, i: usize, stat: &GameStats, acts: &mut Acts) {
         let g = self.cfg.custom_games[i].clone();

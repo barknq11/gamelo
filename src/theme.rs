@@ -412,7 +412,7 @@ pub fn apply(ctx: &egui::Context, p: Palette) {
         v.text_edit_bg_color = Some(p.field);
         v.faint_bg_color = p.card;
         v.code_bg_color = p.card2;
-        v.window_corner_radius = rad(14);
+        v.window_corner_radius = rad(18);
         v.menu_corner_radius = rad(10);
         v.window_shadow = egui::epaint::Shadow {
             offset: [0, 12],
@@ -439,30 +439,30 @@ pub fn apply(ctx: &egui::Context, p: Palette) {
         w.noninteractive.fg_stroke = egui::Stroke::new(1.0, p.text);
         w.noninteractive.corner_radius = rad(10);
 
-        w.inactive.bg_fill = p.card2;
-        w.inactive.weak_bg_fill = p.card2;
+        w.inactive.bg_fill = p.card;
+        w.inactive.weak_bg_fill = p.card;
         // A touch stronger than card borders, so checkboxes and buttons read on cards.
         w.inactive.bg_stroke = egui::Stroke::new(1.0, p.border.lerp_to_gamma(p.subtext, 0.22));
         w.inactive.fg_stroke = egui::Stroke::new(1.0, p.text);
-        w.inactive.corner_radius = rad(9);
+        w.inactive.corner_radius = rad(10);
 
-        w.hovered.bg_fill = p.hover;
-        w.hovered.weak_bg_fill = p.hover;
+        w.hovered.bg_fill = p.card2;
+        w.hovered.weak_bg_fill = p.card2;
         w.hovered.bg_stroke = egui::Stroke::new(1.0, p.accent.gamma_multiply(0.9));
         w.hovered.fg_stroke = egui::Stroke::new(1.0, p.text);
-        w.hovered.corner_radius = rad(9);
+        w.hovered.corner_radius = rad(10);
 
         w.active.bg_fill = p.accent;
         w.active.weak_bg_fill = p.accent;
         w.active.bg_stroke = egui::Stroke::new(1.0, p.accent);
         w.active.fg_stroke = egui::Stroke::new(1.0, p.on_accent);
-        w.active.corner_radius = rad(9);
+        w.active.corner_radius = rad(10);
 
         w.open.bg_fill = p.card2;
         w.open.weak_bg_fill = p.card2;
         w.open.bg_stroke = egui::Stroke::new(1.0, p.border);
         w.open.fg_stroke = egui::Stroke::new(1.0, p.text);
-        w.open.corner_radius = rad(9);
+        w.open.corner_radius = rad(10);
     });
 }
 

@@ -15,6 +15,7 @@ impl App {
             LibFilter::All => true,
             LibFilter::Favorites => g.favorite,
             LibFilter::Unplayed => self.stats.get(&g.id).is_none_or(|s| s.last_played == 0),
+            LibFilter::Mine => g.store.is_none() && g.launcher.is_none() && g.rom.is_none(),
             LibFilter::Status(s) => g.status == *s,
             LibFilter::Collection(c) => g.collections.contains(c),
         }
@@ -31,6 +32,9 @@ impl App {
             out.push((LibFilter::Favorites, lg("Favorites").to_string()));
         }
         out.push((LibFilter::Unplayed, lg("Not played yet").to_string()));
+        if self.lib_filter == LibFilter::Mine {
+            out.push((LibFilter::Mine, lg("Installed by me").to_string()));
+        }
         for s in GameStatus::ALL {
             if any(&LibFilter::Status(s)) {
                 out.push((LibFilter::Status(s), lg(s.label()).to_string()));
@@ -122,23 +126,21 @@ impl App {
                 ui.close();
             }
         }));
+        // Title and count; search, import and Add game on the far side.
         ui.horizontal(|ui| {
-            vcol(ui, |ui| {
-                ui.label(egui::RichText::new(tr("Library")).size(24.0).strong().color(pal().text));
-                let n = self.cfg.custom_games.len();
-                let playing = self.running.len();
-                let games = if n == 1 { lg("1 game").to_string() } else { lfmt("{} games", &[&n]) };
-                let sub = match playing {
-                    0 => disp(&games),
-                    p => disp(&format!("{games} · {}", lfmt("{} playing", &[&p]))),
-                };
-                ui.label(egui::RichText::new(sub).color(pal().subtext).small());
-            });
+            let n = self.cfg.custom_games.iter().filter(|g| g.rom.is_none()).count();
+            ui.label(title_text(tr("Library"), 32.0));
+            let games = if n == 1 { lg("1 game").to_string() } else { lfmt("{} games", &[&n]) };
+            let games = match self.running.len() {
+                0 => games,
+                p => format!("{games} · {}", lfmt("{} playing", &[&p])),
+            };
+            ui.label(egui::RichText::new(disp(&games)).size(18.0).color(pal().faint));
             ui.with_layout(far_end(), |ui| {
-                if primary_button(ui, "+  Add game").clicked() {
+                if primary_button(ui, "Add game").clicked() {
                     acts.add = true;
                 }
-                ui.menu_button(tr("Import"), |ui| menu_ui(ui, |ui| {
+                ui.menu_button(egui::RichText::new(tr("Import")).family(semibold_family()), |ui| menu_ui(ui, |ui| {
                     if ui.button(tr("Scan a folder for games…")).on_hover_text(tr("Find every game in a folder and add them together")).clicked() {
                         acts.scan = true;
                         ui.close();
@@ -152,47 +154,28 @@ impl App {
                         ui.close();
                     }
                 }));
-                if !self.auto_pending.is_empty() {
-                    ui.label(egui::RichText::new(tr("Fetching artwork…")).color(pal().subtext).small());
-                    ui.spinner();
-                } else if self.sgdb_key().is_some()
-                    && !self.needs_art().is_empty()
-                    && ui.button(tr("Fill missing artwork")).clicked()
-                {
-                    acts.fill_art = true;
+                let (search, _) = text_field(ui, &mut self.search, "Search library", 260.0);
+                if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F)) {
+                    search.request_focus();
                 }
             });
         });
-        ui.add_space(14.0);
-        ui.horizontal(|ui| {
-            let (search, _) = text_field(ui, &mut self.search, "Search games…", 280.0);
-            if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F)) {
-                search.request_focus();
-            }
-            ui.with_layout(far_end(), |ui| {
-                egui::ComboBox::from_id_salt("sort")
-                    .selected_text(tr(self.sort.label()))
-                    .show_ui(ui, |ui| menu_ui(ui, |ui| {
-                        for m in [SortMode::Recent, SortMode::Name, SortMode::Playtime] {
-                            ui.selectable_value(&mut self.sort, m, tr(m.label()));
-                        }
-                    }));
-                ui.label(egui::RichText::new(tr("Sort")).color(pal().subtext).small());
-                ui.add_space(10.0);
-                if let Some(k) = tile_size_toggle(ui, &self.cfg.settings) {
-                    self.set_layout(k);
-                }
-            });
-        });
-        // Filters: the fixed ones, then statuses and collections that have games.
+        ui.add_space(18.0);
+        // Filters with their counts; sort and the grid/list switch at the end.
         let options = self.filter_options();
         if !options.iter().any(|(f, _)| *f == self.lib_filter) {
             self.lib_filter = LibFilter::All;
         }
-        ui.add_space(10.0);
-        ui.horizontal_wrapped(|ui| {
+        let games = self.cfg.custom_games.len();
+        let controls_w = 400.0_f32.min(ui.available_width() * 0.45);
+        let chips_w = ui.available_width() - controls_w;
+        let wrap = egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true);
+        let wrap = if rtl() { egui::Layout::right_to_left(egui::Align::Center).with_main_wrap(true) } else { wrap };
+        ui.horizontal_top(|ui| {
+          ui.allocate_ui_with_layout(egui::vec2(chips_w, 0.0), wrap, |ui| {
             for (f, label) in options {
-                let r = choice_chip(ui, self.lib_filter == f, &label);
+                let count = (0..games).filter(|&i| self.cfg.custom_games[i].rom.is_none() && self.filter_matches(&f, i)).count();
+                let r = count_chip(ui, self.lib_filter == f, &label, count);
                 if r.clicked() {
                     self.lib_filter = f.clone();
                 }
@@ -209,6 +192,30 @@ impl App {
                     }));
                 }
             }
+          });
+            ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 38.0), far_end(), |ui| {
+                let list = self.cfg.settings.library_view == "list";
+                if let Some(k) = view_toggle(ui, list) {
+                    self.set_layout(if k { "list" } else { self.cfg.settings.tile_size_key() }.to_string().as_str());
+                }
+                egui::ComboBox::from_id_salt("sort")
+                    .selected_text(egui::RichText::new(disp(&lfmt("Sort: {}", &[&lg(self.sort.label())]))).color(pal().subtext))
+                    .height(300.0)
+                    .show_ui(ui, |ui| menu_ui(ui, |ui| {
+                        for m in [SortMode::Recent, SortMode::Name, SortMode::Playtime] {
+                            ui.selectable_value(&mut self.sort, m, tr(m.label()));
+                        }
+                    }));
+                if !self.auto_pending.is_empty() {
+                    ui.spinner();
+                    ui.label(egui::RichText::new(tr("Fetching artwork…")).color(pal().subtext).small());
+                } else if self.sgdb_key().is_some()
+                    && !self.needs_art().is_empty()
+                    && ui.button(tr("Fill missing artwork")).clicked()
+                {
+                    acts.fill_art = true;
+                }
+            });
         });
         ui.add_space(18.0);
 
@@ -221,9 +228,6 @@ impl App {
             save_config(&self.cfg);
         }
         let browsing = self.search.trim().is_empty() && self.lib_filter == LibFilter::All;
-        if browsing {
-            self.jump_back_in(ui, ctx, acts);
-        }
         let order = self.library_order();
         if order.is_empty() {
             let why = match self.lib_filter {
@@ -408,7 +412,7 @@ impl App {
             egui::vec2(0.5 + 0.5 * aim.x, 0.5 + 0.5 * aim.y)
         };
         let art_zoom = 1.0 + 0.07 * h;
-        let radius = rad(10);
+        let radius = rad(12);
         // Coming back from its page, the poster is still flying home: leave its
         // slot empty (the title and playtime below still show).
         let mut painter = ui.painter().clone();
@@ -435,11 +439,11 @@ impl App {
                 let alpha = pop.min(1.0);
                 if let Some(f) = fade.filter(|&f| f < 1.0 && !generated) {
                     if let Some(old) = self.game_generated_poster(ctx, i) {
-                        painter.add(cover_fill_shape_pan(&old, poster, 10, alpha, art_zoom, art_pan));
+                        painter.add(cover_fill_shape_pan(&old, poster, 12, alpha, art_zoom, art_pan));
                     }
-                    painter.add(cover_fill_shape_pan(t, poster, 10, f * alpha, art_zoom, art_pan));
+                    painter.add(cover_fill_shape_pan(t, poster, 12, f * alpha, art_zoom, art_pan));
                 } else {
-                    painter.add(cover_fill_shape_pan(t, poster, 10, alpha, art_zoom, art_pan));
+                    painter.add(cover_fill_shape_pan(t, poster, 12, alpha, art_zoom, art_pan));
                 }
             }
             None => {
@@ -449,15 +453,10 @@ impl App {
         // Text and badges over the poster use a dark palette in every theme.
         let over = theme::OverImage::new();
         if generated {
-            // Generated posters carry the name; real covers already show the title.
-            let galley = painter.layout(
-                disp(&name),
-                egui::FontId::proportional(15.0),
-                pal().text,
-                poster.width() - 24.0,
-            );
-            let pos = egui::pos2(poster.center().x - galley.size().x / 2.0, poster.top() + poster.height() * 0.62);
-            painter.galley(pos, galley, pal().text);
+            // Generated posters carry the name in the corner; real covers already show the title.
+            let galley = painter.layout(disp(&name), egui::FontId::new(18.0, heading_family()), pal().text, poster.width() - 28.0);
+            let x = if rtl() { poster.right() - 14.0 - galley.size().x } else { poster.left() + 14.0 };
+            painter.galley(egui::pos2(x, poster.bottom() - 14.0 - galley.size().y), galley, pal().text);
         }
 
         // While artwork is being fetched, a band of light sweeps the poster.
@@ -470,23 +469,22 @@ impl App {
             }
         }
 
-        // Badges, top-left. A running game's dot breathes.
+        // Badges, top-left: a heart for favourites, then live states (a
+        // running game's dot breathes).
         let pulse = if running { self.pulse(2.4) } else { 1.0 };
-        let mut y = poster.top() + 8.0;
+        let mut y = poster.top() + 10.0;
+        if fav {
+            let x = if rtl() { poster.right() - 38.0 } else { poster.left() + 10.0 };
+            let badge = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(28.0, 28.0));
+            painter.rect_filled(badge, rad(8), pal().bg);
+            glyph(&painter, Glyph::Heart, badge.shrink(7.0), pal().accent);
+            y += 34.0;
+        }
         if running {
             y += poster_badge(&painter, egui::pos2(poster.left() + 8.0, y), "Running", pal().ok, pulse);
         }
         if missing {
             poster_badge(&painter, egui::pos2(poster.left() + 8.0, y), "Missing files", pal().warn, 1.0);
-        }
-        if fav {
-            let c = poster.right_top() + egui::vec2(-18.0, 18.0);
-            painter.circle_filled(c, 12.0, egui::Color32::from_black_alpha(170));
-            star(&painter, c, 7.5, true, GOLD);
-        }
-        let status = self.cfg.custom_games[i].status;
-        if status != GameStatus::None {
-            poster_badge(&painter, poster.left_bottom() + egui::vec2(8.0, -28.0), status.label(), status.color(), 1.0);
         }
 
         let center = poster.center();
@@ -598,7 +596,7 @@ impl App {
         // its poster lifts.
         let mut job = egui::text::LayoutJob::simple_singleline(
             disp(&name),
-            egui::FontId::proportional(14.5),
+            egui::FontId::new(15.0, semibold_family()),
             pal().text.lerp_to_gamma(pal().accent, 0.55 * h),
         );
         job.wrap = egui::text::TextWrapping {
@@ -614,22 +612,26 @@ impl App {
         // After a session the total counts up to its new value, with a fading "+25m".
         let (playtime, added) = self.shown_playtime(&id, stat.playtime_secs);
         let glow = added.as_ref().map_or(0.0, |(_, a)| *a);
-        let (sub, sub_color) = if running {
-            (tr("Playing now"), pal().ok)
+        // "● Playing · Epic Games": the status (or playtime) and where it's from.
+        let g = &self.cfg.custom_games[i];
+        let (status, source) = (g.status, game_source(g));
+        let (sub, sub_color, dot) = if running {
+            (tr("Playing now"), pal().ok, pal().ok)
+        } else if status != GameStatus::None {
+            (disp(&format!("{} · {source}", lg(status.label()))), pal().subtext, status.color())
         } else if stat.last_played == 0 {
-            (tr("Never played"), pal().faint)
+            (disp(&format!("{} · {source}", lg("Never played"))), pal().faint, pal().faint)
         } else {
-            (
-                disp(&format!("{} · {}", format_duration(playtime), format_ago(stat.last_played, unix_now()))),
-                pal().subtext.lerp_to_gamma(pal().ok, glow),
-            )
+            (disp(&format!("{} · {source}", format_duration(playtime))), pal().subtext.lerp_to_gamma(pal().ok, glow), pal().faint)
         };
-        let (sx, salign) = if rtl() { (rect.right(), egui::Align2::RIGHT_TOP) } else { (rect.left(), egui::Align2::LEFT_TOP) };
+        let dot_x = if rtl() { rect.right() - 4.0 } else { rect.left() + 4.0 };
+        labels.circle_filled(egui::pos2(dot_x, rect.top() + tile_h() + 37.0), 4.0, dot);
+        let (sx, salign) = if rtl() { (rect.right() - 14.0, egui::Align2::RIGHT_TOP) } else { (rect.left() + 14.0, egui::Align2::LEFT_TOP) };
         let sub_rect = labels.text(
             egui::pos2(sx, rect.top() + tile_h() + 30.0),
             salign,
             sub,
-            egui::FontId::proportional(12.0),
+            egui::FontId::proportional(13.0),
             sub_color,
         );
         if let Some((delta, alpha)) = added.filter(|_| !running) {

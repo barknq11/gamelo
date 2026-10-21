@@ -374,7 +374,7 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(16.0, 14.0);
                 for &i in &games {
-                    self.small_poster(ui, ctx, i, egui::vec2(124.0, 186.0), "emu", acts);
+                    self.small_poster(ui, ctx, i, egui::vec2(124.0, 186.0), "", acts);
                 }
             });
             ui.add_space(22.0);

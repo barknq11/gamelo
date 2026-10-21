@@ -14,15 +14,17 @@ impl App {
         let run = self.running.get(&id).cloned();
         let stat = self.stats.get(&id).cloned().unwrap_or_default();
 
-        acts.back |= back_button(ui, ctx, "Library");
-        ui.add_space(12.0);
+        // Escape (a controller's B) goes back, as the banner's Library button does.
+        if ctx.memory(|m| m.focused().is_none()) && !overlay_open(ctx) && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            acts.back = true;
+        }
 
-        // Hero banner, with the poster, title and actions laid over it.
+        // The banner: back button, poster, tags, title and actions over the game's art.
         let w = ui.available_width();
-        let hero_h = (w * 0.32).clamp(250.0, 340.0);
+        let hero_h = 380.0;
         let (hero, hero_resp) = ui.allocate_exact_size(egui::vec2(w, hero_h), egui::Sense::click());
         let painter = ui.painter().clone();
-        let radius = rad(14);
+        let radius = rad(18);
         // Parallax: the banner image drifts slower than the page as it scrolls.
         let drift = (hero.top() - ui.clip_rect().top()) / hero.height();
         let pan = if self.cfg.settings.reduce_motion { 0.5 } else { (0.5 + 0.6 * drift).clamp(0.0, 1.0) };
@@ -31,17 +33,42 @@ impl App {
         let zoom = 1.12 + 0.08 * (1.0 - settle);
         match self.game_hero(ctx, i) {
             Some(t) => {
-                painter.add(cover_fill_shape_ex(&t, hero, 14, 1.0, zoom, pan));
+                painter.add(cover_fill_shape_ex(&t, hero, 18, 1.0, zoom, pan));
             }
             None => {
-                painter.rect_filled(hero, radius, pal().card);
+                // The design's stand-in: plum with a ring and a moon.
+                painter.rect_filled(hero, radius, pal().accent.gamma_multiply(0.18).lerp_to_gamma(pal().card, 0.5));
+                let clip = painter.with_clip_rect(hero.shrink(1.0));
+                let c = egui::pos2(hero.right() - 200.0, hero.top() + 120.0);
+                clip.circle_stroke(c, 240.0, egui::Stroke::new(80.0, pal().accent.gamma_multiply(0.14)));
+                clip.circle_filled(c - egui::vec2(90.0, -20.0), 80.0, pal().accent.gamma_multiply(0.2));
             }
         }
+        // Darker towards the bottom so the title holds up over any art.
+        let mut mesh = egui::Mesh::default();
+        let (top, bottom) = (egui::Color32::from_black_alpha(40), egui::Color32::from_black_alpha(200));
+        for (pos, c) in [(hero.left_top(), top), (hero.right_top(), top), (hero.right_bottom(), bottom), (hero.left_bottom(), bottom)] {
+            mesh.colored_vertex(pos, c);
+        }
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        painter.with_clip_rect(hero.shrink(if pal().square { 0.0 } else { 3.0 })).add(mesh);
         painter.rect_stroke(hero, radius, egui::Stroke::new(1.0, pal().border), egui::StrokeKind::Inside);
 
-        let pad = 24.0;
-        let ph = (hero_h - 2.0 * pad).min(220.0);
-        let pw = ph * 2.0 / 3.0;
+        let pad = 32.0;
+        // Back to the library, top corner.
+        {
+            let back = egui::Rect::from_min_size(egui::pos2(if rtl() { hero.right() - pad - 120.0 } else { hero.left() + pad }, hero.top() + 24.0), egui::vec2(120.0, 44.0));
+            let layout = if rtl() { egui::Layout::right_to_left(egui::Align::Center) } else { egui::Layout::left_to_right(egui::Align::Center) };
+            let child = &mut ui.new_child(egui::UiBuilder::new().max_rect(back).layout(layout));
+            let _over = theme::OverImage::new();
+            let label = if rtl() { format!("{}  ›", tr("Library")) } else { format!("‹  {}", tr("Library")) };
+            if child.add(egui::Button::new(egui::RichText::new(label).family(semibold_family()).size(14.0)).fill(pal().bg).stroke(egui::Stroke::NONE).corner_radius(rad(10)).min_size(egui::vec2(0.0, 44.0))).clicked() {
+                acts.back = true;
+            }
+        }
+        let pw = 150.0;
+        let ph = pw * 1.5;
         let px = if rtl() { hero.right() - pad - pw } else { hero.left() + pad };
         let poster = egui::Rect::from_min_size(egui::pos2(px, hero.bottom() - pad - ph), egui::vec2(pw, ph));
         self.motion.hero_poster = Some(poster);
@@ -52,14 +79,9 @@ impl App {
                 .game_poster(ctx, i)
                 .or_else(|| self.game_generated_poster(ctx, i))
         {
-            painter.add(cover_fill_shape(&t, poster, 10, 1.0));
+            painter.add(cover_fill_shape(&t, poster, 12, 1.0));
         }
-        painter.rect_stroke(
-            poster,
-            rad(10),
-            egui::Stroke::new(1.0, egui::Color32::from_white_alpha(45)),
-            egui::StrokeKind::Inside,
-        );
+        painter.rect_stroke(poster, rad(12), egui::Stroke::new(1.0, egui::Color32::from_white_alpha(45)), egui::StrokeKind::Inside);
         let poster_resp = ui
             .interact(poster, ui.scope_id().with("hero-poster"), egui::Sense::click())
             .on_hover_text(tr("Change artwork"))
@@ -82,107 +104,124 @@ impl App {
             acts.game.push((id.clone(), act));
         }
         let dx = self.shake_dx(&id);
-        let (playtime, added) = self.shown_playtime(&id, stat.playtime_secs);
-        let text_area = if rtl() {
-            egui::Rect::from_min_max(egui::pos2(hero.left() + pad, hero.top() + pad), egui::pos2(poster.left() - 24.0, hero.bottom() - pad))
+        // Play, favourite and the full menu, bottom corner.
+        let actions_w = 260.0;
+        let actions = if rtl() {
+            egui::Rect::from_min_size(egui::pos2(hero.left() + pad, hero.bottom() - pad - 52.0), egui::vec2(actions_w, 52.0))
         } else {
-            egui::Rect::from_min_max(egui::pos2(poster.right() + 24.0, hero.top() + pad), egui::pos2(hero.right() - pad, hero.bottom() - pad))
+            egui::Rect::from_min_size(egui::pos2(hero.right() - pad - actions_w, hero.bottom() - pad - 52.0), egui::vec2(actions_w, 52.0))
         };
-        ui.scope_builder(
-            egui::UiBuilder::new()
-                .max_rect(text_area)
-                .layout(egui::Layout::bottom_up(if rtl() { egui::Align::Max } else { egui::Align::Min })),
-            |ui| {
+        {
+            let _over = theme::OverImage::new();
+            let ui = &mut ui.new_child(egui::UiBuilder::new().max_rect(actions).layout(far_end()));
+            ui.spacing_mut().item_spacing.x = 10.0;
+            let square = |ui: &mut egui::Ui, salt: &str| -> egui::Response {
+                let (r, resp) = ui.allocate_exact_size(egui::vec2(52.0, 52.0), egui::Sense::click());
+                ui.painter().rect_filled(r, rad(12), if resp.hovered() { pal().card2 } else { pal().bg });
+                let _ = salt;
+                resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+            };
+            let more = square(ui, "more");
+            glyph(ui.painter(), Glyph::More, egui::Rect::from_center_size(more.rect.center(), egui::vec2(20.0, 20.0)), pal().text);
+            egui::Popup::menu(&more).show(|ui| menu_ui(ui, |ui| game_menu(ui, &g, run.is_some(), true, &self.cfg.settings.collections, acts)));
+            let tip = if g.favorite { "Remove from favorites" } else { "Add to favorites" };
+            let fav = square(ui, "fav").on_hover_text(tr(tip));
+            glyph(ui.painter(), Glyph::Heart, egui::Rect::from_center_size(fav.rect.center(), egui::vec2(20.0, 20.0)), if g.favorite { pal().accent } else { pal().faint });
+            if fav.clicked() {
+                acts.game.push((id.clone(), GameAct::Favorite));
+            }
+            if play_button(ui, play_state, phase, dx).clicked() {
+                let act = if run.is_some() { GameAct::Stop } else { GameAct::Play };
+                acts.game.push((id.clone(), act));
+            }
+        }
+        // Tags, title and a line about the game, beside the poster.
+        let text_area = if rtl() {
+            egui::Rect::from_min_max(egui::pos2(actions.right() + 20.0, hero.top() + pad), egui::pos2(poster.left() - 28.0, hero.bottom() - pad))
+        } else {
+            egui::Rect::from_min_max(egui::pos2(poster.right() + 28.0, hero.top() + pad), egui::pos2(actions.left() - 20.0, hero.bottom() - pad))
+        };
+        let info = self.store.cache.get(&id).and_then(|e| e.info.clone());
+        {
+            let ui = &mut ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(text_area)
+                    .layout(egui::Layout::bottom_up(if rtl() { egui::Align::Max } else { egui::Align::Min })),
+            );
+            {
                 let _over = theme::OverImage::new();
-                // Bottom-up: the action row goes in first, the title last.
-                ui.horizontal(|ui| {
-                    match &run {
-                        Some(m) => {
-                            if play_button(ui, play_state, phase, dx).clicked() {
-                                acts.game.push((id.clone(), GameAct::Stop));
-                            }
-                            ui.add_space(4.0);
-                            ui.label(
-                                egui::RichText::new(trf(
-                                    "Running · {}",
-                                    &[&format_duration(unix_now().saturating_sub(m.started))],
-                                ))
-                                .color(pal().ok),
-                            );
-                        }
-                        None => {
-                            if play_button(ui, play_state, phase, dx).clicked() {
-                                acts.game.push((id.clone(), GameAct::Play));
-                            }
-                        }
-                    }
-                    ui.add_space(6.0);
-                    if ui.button(tr("Change artwork")).clicked() {
-                        acts.game.push((id.clone(), GameAct::Artwork));
-                    }
-                    ui.menu_button(tr("More"), |ui| menu_ui(ui, |ui| {
-                        for (label, act) in [
-                            ("Add to app menu", GameAct::Shortcut),
-                            ("Copy launch command", GameAct::CopyCommand),
-                            ("Open log", GameAct::OpenLog),
-                        ] {
-                            if ui.button(tr(label)).clicked() {
-                                acts.game.push((id.clone(), act));
-                                ui.close();
-                            }
-                        }
-                        ui.separator();
-                        if ui
-                            .button(egui::RichText::new(tr("Remove from library…")).color(pal().danger))
-                            .clicked()
-                        {
-                            acts.game.push((id.clone(), GameAct::AskRemove));
-                            ui.close();
-                        }
-                    }));
-                    let tip = if g.favorite { "Remove from favorites" } else { "Add to favorites" };
-                    if star_button(ui, g.favorite).on_hover_text(tr(tip)).clicked() {
-                        acts.game.push((id.clone(), GameAct::Favorite));
-                    }
-                    let shown = if g.status == GameStatus::None { tr("Set status") } else { tr(g.status.label()) };
-                    egui::ComboBox::from_id_salt("game-status")
-                        .selected_text(egui::RichText::new(shown).color(g.status.color().lerp_to_gamma(pal().text, 0.3)))
-                        .show_ui(ui, |ui| menu_ui(ui, |ui| {
-                            for st in std::iter::once(GameStatus::None).chain(GameStatus::ALL) {
-                                if ui.selectable_label(g.status == st, tr(st.label())).clicked() {
-                                    acts.game.push((id.clone(), GameAct::SetStatus(st)));
-                                }
-                            }
-                        }));
-                });
-                ui.add_space(12.0);
-                let played = if stat.last_played == 0 {
-                    tr("Never played")
-                } else {
-                    trf("{} played · last played {}", &[&format_duration(playtime), &format_ago(stat.last_played, unix_now())])
-                };
-                ui.horizontal(|ui| {
-                    let glow = added.as_ref().map_or(0.0, |(_, a)| *a);
-                    ui.label(egui::RichText::new(played).color(pal().subtext.lerp_to_gamma(pal().ok, glow)));
-                    if let Some((delta, alpha)) = &added {
-                        ui.label(egui::RichText::new(disp(delta)).color(pal().ok.gamma_multiply(*alpha)));
-                    }
-                });
-                let mut kind = match g.kind {
-                    GameKind::Windows => trf("Windows · {}", &[&self.proton_label(&g.proton_dir)]),
-                    GameKind::Linux => tr("Linux native"),
-                };
-                if let Some(link) = &g.store {
-                    kind = format!("{kind} · {}", link.store.name());
+                // Bottom-up: the line under the title goes in first.
+                let mut facts: Vec<String> = Vec::new();
+                if let Some(m) = &run {
+                    facts.push(lfmt("Running · {}", &[&format_duration(unix_now().saturating_sub(m.started))]));
                 }
-                ui.label(egui::RichText::new(kind).color(pal().subtext).small());
-                ui.add(
-                    egui::Label::new(egui::RichText::new(disp(&g.name)).size(30.0).strong().color(pal().text))
-                        .truncate(),
-                );
-            },
-        );
-        ui.add_space(18.0);
+                if let Some(info) = &info {
+                    facts.extend(info.developers.first().cloned());
+                    facts.extend(info.released.rsplit(' ').next().filter(|y| y.len() == 4 && y.chars().all(|c| c.is_ascii_digit())).map(String::from));
+                    facts.extend(info.genres.first().cloned());
+                }
+                if facts.len() < 2 {
+                    facts.push(match g.kind {
+                        GameKind::Windows => lfmt("Windows · {}", &[&self.proton_label(&g.proton_dir)]),
+                        GameKind::Linux => lg("Linux native").to_string(),
+                    });
+                }
+                let color = if run.is_some() { pal().ok } else { pal().subtext };
+                ui.add(egui::Label::new(egui::RichText::new(disp(&facts.join(" · "))).size(15.0).color(color)).truncate());
+                ui.add_space(4.0);
+                ui.add(egui::Label::new(title_text(disp(&g.name), 52.0)).truncate());
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    tag(ui, &game_source(&g), egui::Color32::from_rgb(0xF7, 0xEE, 0xF4), pal().bg);
+                    if g.status != GameStatus::None {
+                        tag(ui, &tr(g.status.label()), pal().bg, g.status.color());
+                    }
+                    if let Some((label, _)) = info.as_ref().and_then(|i| store::tier_style(&i.protondb)) {
+                        tag(ui, &format!("ProtonDB · {label}"), pal().bg, pal().subtext);
+                    }
+                });
+            }
+        }
+        ui.add_space(24.0);
+
+        // The numbers: playtime, last played, and how long it takes to beat.
+        let (playtime, added) = self.shown_playtime(&id, stat.playtime_secs);
+        let glow = added.as_ref().map_or(0.0, |(_, a)| *a);
+        let hltb = self.hltb.cache.get(&id).and_then(|e| e.times.clone());
+        let mut facts: Vec<(String, String)> = vec![
+            (lg("Played").to_string(), if stat.playtime_secs > 0 { format_duration(playtime) } else { "—".into() }),
+            (lg("Last played").to_string(), if stat.last_played > 0 { format_ago(stat.last_played, unix_now()) } else { lg("Never").to_string() }),
+        ];
+        match hltb.filter(|t| t.main > 0 || t.plus > 0 || t.full > 0) {
+            Some(t) => {
+                for (k, v) in [("Main story", t.main), ("Main + extras", t.plus), ("Completionist", t.full)] {
+                    facts.push((lg(k).to_string(), if v > 0 { format!("~{}", hltb::hours(v)) } else { "—".into() }));
+                }
+            }
+            None => {
+                let sessions = if stat.last_played > 0 { stat.sessions.max(1) } else { 0 };
+                facts.push((lg("Sessions").to_string(), if sessions > 0 { sessions.to_string() } else { "—".into() }));
+                let avg = if stat.sessions > 0 { format_duration(stat.playtime_secs / u64::from(stat.sessions)) } else { "—".into() };
+                facts.push((lg("Average session").to_string(), avg));
+            }
+        }
+        let n = facts.len() as f32;
+        let tile_w = (w - 14.0 * (n - 1.0)) / n;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 14.0;
+            for (k, (label, value)) in facts.into_iter().enumerate() {
+                egui::Frame::new().inner_margin(egui::Margin::symmetric(18, 16)).corner_radius(rad(14)).fill(pal().card).stroke(egui::Stroke::new(1.0, pal().border)).show(ui, |ui| {
+                    ui.set_width(tile_w - 38.0);
+                    vcol(ui, |ui| {
+                        ui.label(egui::RichText::new(disp(&label)).size(13.0).color(pal().faint));
+                        let color = if k == 0 { pal().text.lerp_to_gamma(pal().ok, glow) } else { pal().text };
+                        ui.add(egui::Label::new(egui::RichText::new(disp(&value)).family(heading_family()).size(22.0).color(color)).truncate());
+                    });
+                });
+            }
+        });
+        ui.add_space(22.0);
 
         if game_missing_files(&g) {
             let what = if !Path::new(&g.exe).is_file() {
