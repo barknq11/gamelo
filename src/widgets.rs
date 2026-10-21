@@ -1022,30 +1022,6 @@ pub(crate) fn tile_size_toggle(ui: &mut egui::Ui, settings: &Settings) -> Option
     picked
 }
 
-/// Favourite gold, the same in every theme.
-pub(crate) const GOLD: egui::Color32 = egui::Color32::from_rgb(245, 196, 81);
-
-/// A five-pointed star centred on `c` (painted: egui only fills convex shapes,
-/// so it's a pentagon plus five tips).
-pub(crate) fn star(painter: &egui::Painter, c: egui::Pos2, r: f32, filled: bool, color: egui::Color32) {
-    let at = |k: usize, rr: f32| {
-        let a = -std::f32::consts::FRAC_PI_2 + k as f32 * std::f32::consts::PI / 5.0;
-        c + rr * egui::vec2(a.cos(), a.sin())
-    };
-    let inner = r * 0.45;
-    if filled {
-        let pent: Vec<_> = (0..5).map(|k| at(2 * k + 1, inner)).collect();
-        painter.add(egui::Shape::convex_polygon(pent, color, egui::Stroke::NONE));
-        for k in 0..5 {
-            let tip = vec![at((2 * k + 9) % 10, inner), at(2 * k, r), at(2 * k + 1, inner)];
-            painter.add(egui::Shape::convex_polygon(tip, color, egui::Stroke::NONE));
-        }
-    } else {
-        let mut pts: Vec<_> = (0..10).map(|k| at(k, if k % 2 == 0 { r } else { inner })).collect();
-        pts.push(pts[0]);
-        painter.add(egui::Shape::line(pts, egui::Stroke::new(1.5, color)));
-    }
-}
 
 
 #[derive(Clone, Copy, PartialEq)]

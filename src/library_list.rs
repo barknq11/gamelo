@@ -72,7 +72,7 @@ impl App {
             p.galley(egui::pos2(nx, rect.center().y - galley.size().y / 2.0), galley, name_color);
             if g.favorite {
                 let sx = x_at(rect, cols[1].1 - 18.0);
-                star(p, egui::pos2(sx, rect.center().y), 6.5, true, GOLD);
+                glyph(p, Glyph::Heart, egui::Rect::from_center_size(egui::pos2(sx, rect.center().y), egui::vec2(14.0, 14.0)), pal().accent);
             }
             let mid = |off: f32| egui::pos2(x_at(rect, off), rect.center().y);
             if g.status != GameStatus::None || running {

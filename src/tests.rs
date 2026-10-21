@@ -1084,6 +1084,30 @@ fn stores_shots() {
     h.app.cfg.settings.language = "en".into();
 }
 
+/// The five screens of the design mock-ups, in Gamelo Night with rounded corners:
+/// SHOTS=dir cargo test -- --ignored design_shots --test-threads=1
+#[test]
+#[ignore]
+fn design_shots() {
+    let mut h = Harness::new("design");
+    h.app.cfg.settings.square_corners = false;
+    h.app.cfg.settings.dark_theme = "gamelo".into();
+    h.app.cfg.settings.accent = String::new();
+    h.page(Page::Home);
+    h.shot("d1-home.png");
+    h.page(Page::Library);
+    h.shot("d2-library.png");
+    h.app.selected = h.app.library_order().first().map(|&i| h.app.cfg.custom_games[i].id.clone());
+    h.page(Page::Game);
+    h.shot("d3-game.png");
+    h.page(Page::Stats);
+    h.shot("d4-stats.png");
+    h.app.couch = Some(couch::Couch::new(h.app.now));
+    h.idle(10);
+    h.shot("d5-couch.png");
+    h.app.couch = None;
+}
+
 /// Every page goes quiet when nothing moves (no repaint loop burning CPU):
 /// cargo test -- --ignored idle_pages --test-threads=1
 #[test]
